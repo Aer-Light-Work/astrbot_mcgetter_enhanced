@@ -5,10 +5,344 @@ import socket
 import base64
 from pathlib import Path
 import re
+from dataclasses import dataclass, field
+from typing import List, Optional, Dict, Any, Tuple
 from astrbot.api import logger
 
 csu_host = 'csu-mc.org'
 csu_get_players = 'https://map.magicalsheep.cn/tiles/players.json'
+
+# Minecraft 颜色代码映射
+MC_COLOR_CODES = {
+    "0": (0, 0, 0),
+    "1": (0, 0, 170),
+    "2": (0, 170, 0),
+    "3": (0, 170, 170),
+    "4": (170, 0, 0),
+    "5": (170, 0, 170),
+    "6": (255, 170, 0),
+    "7": (170, 170, 170),
+    "8": (85, 85, 85),
+    "9": (85, 85, 255),
+    "a": (85, 255, 85),
+    "b": (85, 255, 255),
+    "c": (255, 85, 85),
+    "d": (255, 85, 255),
+    "e": (255, 255, 85),
+    "f": (255, 255, 255),
+}
+
+# Minecraft 格式化代码
+MC_FORMAT_CODES = {
+    "k": "obfuscated",
+    "l": "bold",
+    "m": "strikethrough",
+    "n": "underline",
+    "o": "italic",
+    "r": "reset",
+}
+
+
+@dataclass
+class TextSegment:
+    """一段带格式的文本"""
+    text: str
+    color: Optional[Tuple[int, int, int]] = None
+    bold: bool = False
+    italic: bool = False
+    underline: bool = False
+    strikethrough: bool = False
+
+
+@dataclass
+class MotdLine:
+    """MOTD 的一行，包含多个 TextSegment"""
+    segments: List[TextSegment] = field(default_factory=list)
+
+    def plain_text(self) -> str:
+        """获取纯文本内容"""
+        return "".join(s.text for s in self.segments)
+
+
+def parse_mc_color(color_str: str) -> Optional[Tuple[int, int, int]]:
+    """
+    解析 Minecraft 颜色字符串
+    支持: 单字符代码(§a), hex(#FF0000), 颜色名称(red)
+    """
+    if not color_str:
+        return None
+    color_str = str(color_str).lower()
+    # 单字符代码
+    if len(color_str) == 1 and color_str in MC_COLOR_CODES:
+        return MC_COLOR_CODES[color_str]
+    # hex 颜色
+    if color_str.startswith("#") and len(color_str) == 7:
+        try:
+            return (
+                int(color_str[1:3], 16),
+                int(color_str[3:5], 16),
+                int(color_str[5:7], 16),
+            )
+        except ValueError:
+            pass
+    # 颜色名称
+    color_names = {
+        "black": (0, 0, 0),
+        "dark_blue": (0, 0, 170),
+        "dark_green": (0, 170, 0),
+        "dark_aqua": (0, 170, 170),
+        "dark_red": (170, 0, 0),
+        "dark_purple": (170, 0, 170),
+        "gold": (255, 170, 0),
+        "gray": (170, 170, 170),
+        "grey": (170, 170, 170),
+        "dark_gray": (85, 85, 85),
+        "dark_grey": (85, 85, 85),
+        "blue": (85, 85, 255),
+        "green": (85, 255, 85),
+        "aqua": (85, 255, 255),
+        "red": (255, 85, 85),
+        "light_purple": (255, 85, 255),
+        "yellow": (255, 255, 85),
+        "white": (255, 255, 255),
+        "reset": None,
+    }
+    return color_names.get(color_str)
+
+
+def parse_component(component: Any, default_color: Optional[Tuple[int, int, int]] = None) -> List[TextSegment]:
+    """
+    递归解析 Minecraft Chat Component 为 TextSegment 列表
+    支持 dict 格式和 mcstatus 的 Component 对象
+    """
+    segments: List[TextSegment] = []
+
+    if component is None:
+        return segments
+
+    # 纯字符串
+    if isinstance(component, str):
+        return parse_section_sign_text(component, default_color)
+
+    # dict 格式
+    if isinstance(component, dict):
+        return _parse_component_dict(component, default_color)
+
+    # mcstatus Component 对象（有 text, extra, color 等属性）
+    if hasattr(component, "text") or hasattr(component, "extra"):
+        comp_dict = {}
+        if hasattr(component, "text"):
+            comp_dict["text"] = component.text
+        if hasattr(component, "extra"):
+            comp_dict["extra"] = component.extra
+        if hasattr(component, "color"):
+            comp_dict["color"] = component.color
+        if hasattr(component, "bold"):
+            comp_dict["bold"] = component.bold
+        if hasattr(component, "italic"):
+            comp_dict["italic"] = component.italic
+        if hasattr(component, "underlined"):
+            comp_dict["underlined"] = component.underlined
+        if hasattr(component, "strikethrough"):
+            comp_dict["strikethrough"] = component.strikethrough
+        return _parse_component_dict(comp_dict, default_color)
+
+    return segments
+
+
+def _parse_component_dict(comp: Dict[str, Any], default_color: Optional[Tuple[int, int, int]] = None) -> List[TextSegment]:
+    """解析单个 component dict"""
+    segments: List[TextSegment] = []
+
+    # 继承父级格式
+    color = parse_mc_color(comp.get("color", "")) or default_color
+    bold = comp.get("bold", False)
+    italic = comp.get("italic", False)
+    underline = comp.get("underlined", False)
+    strikethrough = comp.get("strikethrough", False)
+
+    # 处理 text 字段
+    text = comp.get("text", "")
+    if text:
+        # 检查 text 中是否包含 § 代码
+        if "§" in text:
+            segments.extend(parse_section_sign_text(text, color))
+        else:
+            segments.append(TextSegment(
+                text=text,
+                color=color,
+                bold=bold,
+                italic=italic,
+                underline=underline,
+                strikethrough=strikethrough,
+            ))
+
+    # 处理 extra 字段（子元素）
+    extras = comp.get("extra", [])
+    if isinstance(extras, list):
+        for child in extras:
+            # 子元素继承当前格式作为默认值
+            child_segments = parse_component(child, default_color=color)
+            # 但子元素自身的格式属性会覆盖
+            if isinstance(child, dict):
+                for seg in child_segments:
+                    if "bold" in child:
+                        seg.bold = bool(child["bold"])
+                    if "italic" in child:
+                        seg.italic = bool(child["italic"])
+                    if "underlined" in child:
+                        seg.underline = bool(child["underlined"])
+                    if "strikethrough" in child:
+                        seg.strikethrough = bool(child["strikethrough"])
+                    if "color" in child:
+                        seg.color = parse_mc_color(str(child["color"])) or seg.color
+            segments.extend(child_segments)
+
+    return segments
+
+
+def parse_section_sign_text(text: str, default_color: Optional[Tuple[int, int, int]] = None) -> List[TextSegment]:
+    """
+    解析包含 § 格式代码的文本
+    §0-§f: 颜色
+    §k: 随机字符(obfuscated, 忽略)
+    §l: 粗体
+    §m: 删除线
+    §n: 下划线
+    §o: 斜体
+    §r: 重置
+    """
+    segments: List[TextSegment] = []
+    current_text: List[str] = []
+    current_color = default_color
+    current_bold = False
+    current_italic = False
+    current_underline = False
+    current_strikethrough = False
+
+    def flush():
+        nonlocal current_text
+        if current_text:
+            segments.append(TextSegment(
+                text="".join(current_text),
+                color=current_color,
+                bold=current_bold,
+                italic=current_italic,
+                underline=current_underline,
+                strikethrough=current_strikethrough,
+            ))
+            current_text = []
+
+    i = 0
+    while i < len(text):
+        if text[i] == "§" and i + 1 < len(text):
+            flush()
+            code = text[i + 1].lower()
+            if code in MC_COLOR_CODES:
+                current_color = MC_COLOR_CODES[code]
+            elif code == "l":
+                current_bold = True
+            elif code == "m":
+                current_strikethrough = True
+            elif code == "n":
+                current_underline = True
+            elif code == "o":
+                current_italic = True
+            elif code == "r":
+                current_color = default_color
+                current_bold = False
+                current_italic = False
+                current_underline = False
+                current_strikethrough = False
+            # §k (obfuscated) 忽略
+            i += 2
+        else:
+            current_text.append(text[i])
+            i += 1
+
+    flush()
+    return segments
+
+
+def parse_motd(description: Any) -> List[MotdLine]:
+    """
+    解析 MOTD 为 MotdLine 列表
+    按 \n 分行
+    """
+    # 先获取所有 segments
+    all_segments = parse_component(description)
+
+    # 按换行符分割
+    lines: List[MotdLine] = []
+    current_line_segments: List[TextSegment] = []
+
+    for seg in all_segments:
+        if "\n" in seg.text:
+            parts = seg.text.split("\n")
+            for idx, part in enumerate(parts):
+                if part:
+                    current_line_segments.append(TextSegment(
+                        text=part,
+                        color=seg.color,
+                        bold=seg.bold,
+                        italic=seg.italic,
+                        underline=seg.underline,
+                        strikethrough=seg.strikethrough,
+                    ))
+                if idx < len(parts) - 1:
+                    # 换行
+                    if current_line_segments:
+                        lines.append(MotdLine(segments=current_line_segments))
+                    current_line_segments = []
+        else:
+            current_line_segments.append(seg)
+
+    if current_line_segments:
+        lines.append(MotdLine(segments=current_line_segments))
+
+    # 确保至少有一行
+    if not lines:
+        lines.append(MotdLine(segments=[]))
+
+    return lines
+
+
+def parse_custom_note_text(text: str) -> List[TextSegment]:
+    """
+    解析自定义备注文本，支持:
+    1. § 分节符格式代码
+    2. <color:#hex>...</color> 标签语法
+    """
+    # 先解析 <color:#hex> 标签
+    result_segments: List[TextSegment] = []
+    pattern = re.compile(r'<color:([^>]+)>(.*?)</color>', re.DOTALL)
+
+    last_end = 0
+    for match in pattern.finditer(text):
+        # 标签前的文本
+        if match.start() > last_end:
+            prefix = text[last_end:match.start()]
+            result_segments.extend(parse_section_sign_text(prefix))
+
+        color_str = match.group(1).strip()
+        inner_text = match.group(2)
+        color = parse_mc_color(color_str)
+
+        # 内部文本可能还包含 § 代码
+        inner_segments = parse_section_sign_text(inner_text)
+        for seg in inner_segments:
+            if seg.color is None:
+                seg.color = color
+            result_segments.append(seg)
+
+        last_end = match.end()
+
+    # 剩余文本
+    if last_end < len(text):
+        remaining = text[last_end:]
+        result_segments.extend(parse_section_sign_text(remaining))
+
+    return result_segments
 
 
 async def get_server_status(host):
@@ -47,6 +381,9 @@ async def get_server_status(host):
                 
         # 对玩家列表进行字母顺序排序
         players_list.sort()
+
+        # 解析 MOTD
+        motd_lines = parse_motd(status.description)
         
         return {
             "players_list": players_list,  # 玩家昵称列表
@@ -56,6 +393,7 @@ async def get_server_status(host):
             "server_version": server_version,  # 服务器游戏版本
             "icon_base64": icon_data,  # 服务器图标base64
             "host": host,  # 服务器录入地址（用于渲染显示）
+            "motd_lines": motd_lines,  # 解析后的 MOTD 行
         }
 
     except (socket.gaierror, ConnectionRefusedError) as e:

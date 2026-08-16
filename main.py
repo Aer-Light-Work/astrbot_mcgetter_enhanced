@@ -13,6 +13,7 @@ from .script.json_operate import (
     update_server_status, auto_cleanup_servers,
     append_trend_point, get_trend_history, get_all_trend_histories
 )
+from .script.preset_manager import get_preset_manager
 import asyncio
 import re
 from datetime import datetime, timedelta
@@ -46,6 +47,20 @@ mchelp
 
 /mcdata [服务器名称/ID] [小时数=24]
 --输出当前群全部或指定服务器在最近N小时的在线人数柱状图
+
+/mcpreset [名称]
+--查看/切换图片样式preset
+
+/mcnote [服务器名称/ID] [备注内容]
+--设置/清除服务器自定义备注（支持§颜色代码和<color:#hex>标签）
+--不填备注内容则清除备注
+
+/mcalias [服务器名称/ID] [别名]
+--设置服务器显示别名
+--不填别名则清除别名
+
+/mctoggle [players|notes|time]
+--切换显示选项：玩家列表/备注/查询时间
 """
 
 @register("astrbot_mcgetter_enhanced", "薄暝", "查询mc服务器信息和玩家列表,在线人数柱状图,渲染为图片(修改自QiChen的mcgetter)", "1.5.0")
@@ -473,7 +488,30 @@ class MyPlugin(Star):
             info['server_name'] = server_name
             # 如果有服务器ID，则在名称前添加ID
             display_name = f"[{server_id}]{server_name}" if server_id else server_name
-            
+
+            # 读取群配置（preset、显示选项、别名、备注）
+            preset_name = None
+            note_text = None
+            alias_name = None
+            display_override = None
+            if json_path:
+                try:
+                    json_data = await read_json(json_path)
+                    preset_name = json_data.get("preset")
+                    display_override = json_data.get("display") or None
+                    # 查找服务器别名和备注
+                    if server_id:
+                        servers = json_data.get("servers", {})
+                        srv = servers.get(str(server_id), {})
+                        alias_name = srv.get("alias")
+                        note_text = srv.get("note")
+                except Exception as e:
+                    logger.debug(f"读取群配置失败: {e}")
+
+            # 使用别名作为显示名称
+            if alias_name:
+                display_name = f"[{server_id}]{alias_name}" if server_id else alias_name
+
             mcinfo_img = await generate_server_info_image(
                 players_list=info['players_list'],
                 latency=info['latency'],
@@ -482,7 +520,12 @@ class MyPlugin(Star):
                 plays_online=info['plays_online'],
                 server_version=info['server_version'],
                 icon_base64=info['icon_base64'],
-                host_address=info.get('host', host)
+                host_address=info.get('host', host),
+                preset_name=preset_name,
+                motd_lines=info.get('motd_lines'),
+                note_text=note_text,
+                group_name=None,
+                display_override=display_override,
             )
             logger.info(f"成功生成服务器 {server_name} 的图片")
             return mcinfo_img
@@ -493,6 +536,156 @@ class MyPlugin(Star):
             if json_path and server_id:
                 await update_server_status(json_path, server_id, False)
             return None
+
+    async def _get_group_config(self, json_path: str) -> Dict[str, Any]:
+        """读取群配置"""
+        try:
+            data = await read_json(json_path)
+            return data
+        except Exception:
+            return {}
+
+    async def _save_group_config(self, json_path: str, config: Dict[str, Any]) -> bool:
+        """保存群配置"""
+        try:
+            data = await read_json(json_path)
+            data.update(config)
+            from .script.json_operate import write_json
+            await write_json(json_path, data)
+            return True
+        except Exception as e:
+            logger.error(f"保存群配置失败: {e}")
+            return False
+
+    @filter.command("mcpreset")
+    async def mcpreset(self, event: AstrMessageEvent, name: Optional[str] = None) -> MessageEventResult:
+        """查看/切换图片样式preset"""
+        try:
+            group_id = event.get_group_id()
+            json_path = await self.get_json_path(group_id)
+            pm = get_preset_manager()
+
+            if name is None:
+                # 查看当前 preset 和可用列表
+                config = await self._get_group_config(str(json_path))
+                current = config.get("preset", pm.get_default_name())
+                available = pm.list_presets()
+                msg = f"当前 preset: {current}\n可用 preset: {', '.join(available)}\n默认 preset: {pm.get_default_name()}"
+                yield event.plain_result(msg)
+            else:
+                # 切换 preset
+                available = pm.list_presets()
+                if name not in available:
+                    yield event.plain_result(f"preset '{name}' 不存在，可用: {', '.join(available)}")
+                    return
+                config = await self._get_group_config(str(json_path))
+                config["preset"] = name
+                if await self._save_group_config(str(json_path), config):
+                    yield event.plain_result(f"已切换为 preset: {name}")
+                else:
+                    yield event.plain_result("切换 preset 失败")
+        except Exception as e:
+            logger.error(f"执行 mcpreset 命令时出错: {e}")
+            yield event.plain_result("切换 preset 时发生错误")
+
+    @filter.command("mcnote")
+    async def mcnote(self, event: AstrMessageEvent, identifier: str, *note_parts: str) -> MessageEventResult:
+        """设置/清除服务器自定义备注"""
+        try:
+            group_id = event.get_group_id()
+            json_path = await self.get_json_path(group_id)
+
+            # 查找服务器
+            sinfo = await get_server_info(str(json_path), identifier)
+            if not sinfo:
+                yield event.plain_result(f"没有找到服务器 {identifier}")
+                return
+
+            sid = str(sinfo.get("id"))
+            note_text = " ".join(note_parts) if note_parts else None
+
+            # 更新服务器备注
+            data = await read_json(str(json_path))
+            servers = data.get("servers", {})
+            if sid in servers:
+                if note_text:
+                    servers[sid]["note"] = note_text
+                    yield event.plain_result(f"已设置服务器 {sinfo['name']} 的备注")
+                else:
+                    servers[sid].pop("note", None)
+                    yield event.plain_result(f"已清除服务器 {sinfo['name']} 的备注")
+                data["servers"] = servers
+                from .script.json_operate import write_json
+                await write_json(str(json_path), data)
+            else:
+                yield event.plain_result("更新备注失败")
+        except Exception as e:
+            logger.error(f"执行 mcnote 命令时出错: {e}")
+            yield event.plain_result("设置备注时发生错误")
+
+    @filter.command("mcalias")
+    async def mcalias(self, event: AstrMessageEvent, identifier: str, *alias_parts: str) -> MessageEventResult:
+        """设置服务器显示别名"""
+        try:
+            group_id = event.get_group_id()
+            json_path = await self.get_json_path(group_id)
+
+            sinfo = await get_server_info(str(json_path), identifier)
+            if not sinfo:
+                yield event.plain_result(f"没有找到服务器 {identifier}")
+                return
+
+            sid = str(sinfo.get("id"))
+            alias_text = " ".join(alias_parts) if alias_parts else None
+
+            data = await read_json(str(json_path))
+            servers = data.get("servers", {})
+            if sid in servers:
+                if alias_text:
+                    servers[sid]["alias"] = alias_text
+                    yield event.plain_result(f"已设置服务器 {sinfo['name']} 的别名为: {alias_text}")
+                else:
+                    servers[sid].pop("alias", None)
+                    yield event.plain_result(f"已清除服务器 {sinfo['name']} 的别名")
+                data["servers"] = servers
+                from .script.json_operate import write_json
+                await write_json(str(json_path), data)
+            else:
+                yield event.plain_result("更新别名失败")
+        except Exception as e:
+            logger.error(f"执行 mcalias 命令时出错: {e}")
+            yield event.plain_result("设置别名时发生错误")
+
+    @filter.command("mctoggle")
+    async def mctoggle(self, event: AstrMessageEvent, option: str) -> MessageEventResult:
+        """切换显示选项：players/notes/time"""
+        try:
+            group_id = event.get_group_id()
+            json_path = await self.get_json_path(group_id)
+
+            option = option.lower()
+            valid_options = {"players": "show_players", "notes": "show_notes", "time": "show_query_time"}
+
+            if option not in valid_options:
+                yield event.plain_result(f"无效选项，可选: {', '.join(valid_options.keys())}")
+                return
+
+            config_key = valid_options[option]
+            data = await read_json(str(json_path))
+            display = data.get("display", {})
+            current = display.get(config_key, True)
+            display[config_key] = not current
+            data["display"] = display
+
+            from .script.json_operate import write_json
+            await write_json(str(json_path), data)
+
+            state = "开启" if not current else "关闭"
+            option_names = {"players": "玩家列表", "notes": "备注", "time": "查询时间"}
+            yield event.plain_result(f"已{state}{option_names[option]}显示")
+        except Exception as e:
+            logger.error(f"执行 mctoggle 命令时出错: {e}")
+            yield event.plain_result("切换显示选项时发生错误")
 
     async def get_json_path(self, group_id: str) -> Path:
         """

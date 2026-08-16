@@ -4,6 +4,11 @@ import astrbot.core.message.components as Comp
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.star import Context, Star, register, StarTools
 from astrbot.api import logger, AstrBotConfig
+try:
+    # GreedyStr 用于吸收命令剩余全部参数（v4.13+ 支持）
+    from astrbot.core.star.filter.command import GreedyStr
+except ImportError:
+    GreedyStr = str
 from .script.get_img import set_custom_font_path
 from .script.get_server_info import get_server_status
 from .script.get_img import generate_server_info_image
@@ -60,8 +65,8 @@ mchelp
 --设置服务器显示别名
 --不填别名则清除别名
 
-/mctoggle [players|notes|time]
---切换显示选项：玩家列表/备注/查询时间
+/mctoggle [players|notes|time|id]
+--切换显示选项：玩家列表/备注/查询时间/序号显示
 """
 
 @register("astrbot_mcgetter_enhanced", "薄暝", "查询mc服务器信息和玩家列表,在线人数柱状图,渲染为图片(修改自QiChen的mcgetter)", "1.5.0")
@@ -493,8 +498,8 @@ class MyPlugin(Star):
                 logger.warning(f"追加柱状图数据失败 group={json_path}, sid={server_id}: {e}")
 
             info['server_name'] = server_name
-            # 如果有服务器ID，则在名称前添加ID
-            display_name = f"[{server_id}]{server_name}" if server_id else server_name
+            # 如果有服务器ID，则在名称前添加ID（默认开启，可在群内通过 /mctoggle id 关闭）
+            show_id = True
 
             # 读取群配置（preset、显示选项、别名、备注）
             preset_name = None
@@ -506,6 +511,7 @@ class MyPlugin(Star):
                     json_data = await read_json(json_path)
                     preset_name = json_data.get("preset")
                     display_override = json_data.get("display") or None
+                    show_id = json_data.get("show_id", True)
                     # 查找服务器别名和备注
                     if server_id:
                         servers = json_data.get("servers", {})
@@ -516,8 +522,8 @@ class MyPlugin(Star):
                     logger.debug(f"读取群配置失败: {e}")
 
             # 使用别名作为显示名称
-            if alias_name:
-                display_name = f"[{server_id}]{alias_name}" if server_id else alias_name
+            base_name = alias_name if alias_name else server_name
+            display_name = f"[{server_id}]{base_name}" if (server_id and show_id) else base_name
 
             mcinfo_img = await generate_server_info_image(
                 players_list=info['players_list'],
@@ -596,7 +602,7 @@ class MyPlugin(Star):
             yield event.plain_result("切换 preset 时发生错误")
 
     @filter.command("mcnote")
-    async def mcnote(self, event: AstrMessageEvent, identifier: str, *note_parts: str) -> MessageEventResult:
+    async def mcnote(self, event: AstrMessageEvent, identifier: str, note_text_arg: GreedyStr = "") -> MessageEventResult:
         """设置/清除服务器自定义备注"""
         try:
             group_id = event.get_group_id()
@@ -609,7 +615,7 @@ class MyPlugin(Star):
                 return
 
             sid = str(sinfo.get("id"))
-            note_text = " ".join(note_parts) if note_parts else None
+            note_text = note_text_arg.strip() if note_text_arg and note_text_arg.strip() else None
 
             # 更新服务器备注
             data = await read_json(str(json_path))
@@ -631,7 +637,7 @@ class MyPlugin(Star):
             yield event.plain_result("设置备注时发生错误")
 
     @filter.command("mcalias")
-    async def mcalias(self, event: AstrMessageEvent, identifier: str, *alias_parts: str) -> MessageEventResult:
+    async def mcalias(self, event: AstrMessageEvent, identifier: str, alias_text_arg: GreedyStr = "") -> MessageEventResult:
         """设置服务器显示别名"""
         try:
             group_id = event.get_group_id()
@@ -643,7 +649,7 @@ class MyPlugin(Star):
                 return
 
             sid = str(sinfo.get("id"))
-            alias_text = " ".join(alias_parts) if alias_parts else None
+            alias_text = alias_text_arg.strip() if alias_text_arg and alias_text_arg.strip() else None
 
             data = await read_json(str(json_path))
             servers = data.get("servers", {})
@@ -665,31 +671,44 @@ class MyPlugin(Star):
 
     @filter.command("mctoggle")
     async def mctoggle(self, event: AstrMessageEvent, option: str) -> MessageEventResult:
-        """切换显示选项：players/notes/time"""
+        """切换显示选项：players/notes/time/id"""
         try:
             group_id = event.get_group_id()
             json_path = await self.get_json_path(group_id)
 
             option = option.lower()
-            valid_options = {"players": "show_players", "notes": "show_notes", "time": "show_query_time"}
+            valid_options = {
+                "players": "display:show_players",
+                "notes": "display:show_notes",
+                "time": "display:show_query_time",
+                "id": "show_id",
+            }
 
             if option not in valid_options:
                 yield event.plain_result(f"无效选项，可选: {', '.join(valid_options.keys())}")
                 return
 
-            config_key = valid_options[option]
+            target = valid_options[option]
             data = await read_json(str(json_path))
-            display = data.get("display", {})
-            current = display.get(config_key, True)
-            display[config_key] = not current
-            data["display"] = display
 
-            from .script.json_operate import write_json
-            await write_json(str(json_path), data)
+            if option == "id":
+                # 序号开关存放在群配置顶层
+                current = data.get("show_id", True)
+                data["show_id"] = not current
+                from .script.json_operate import write_json
+                await write_json(str(json_path), data)
+            else:
+                config_key = target.split(":", 1)[1]
+                display = data.get("display", {})
+                current = display.get(config_key, True)
+                display[config_key] = not current
+                data["display"] = display
+                from .script.json_operate import write_json
+                await write_json(str(json_path), data)
 
             state = "开启" if not current else "关闭"
-            option_names = {"players": "玩家列表", "notes": "备注", "time": "查询时间"}
-            yield event.plain_result(f"已{state}{option_names[option]}显示")
+            option_names = {"players": "玩家列表", "notes": "备注", "time": "查询时间", "id": "序号显示"}
+            yield event.plain_result(f"已{state}{option_names[option]}")
         except Exception as e:
             logger.error(f"执行 mctoggle 命令时出错: {e}")
             yield event.plain_result("切换显示选项时发生错误")

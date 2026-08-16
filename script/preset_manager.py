@@ -56,14 +56,14 @@ BUILTIN_PRESETS: Dict[str, Dict[str, Any]] = {
         },
         "fonts": {
             "group_title_size": 44,
-            "title_size": 36,
+            "title_size": 26,
             "text_size": 22,
             "small_size": 18,
         },
         "layout": {
-            "width": 800,
+            "width": 1177,
             "padding": 30,
-            "icon_size": 80,
+            "icon_size": 100,
             "line_spacing": 8,
         },
     },

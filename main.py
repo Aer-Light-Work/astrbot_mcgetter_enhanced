@@ -3,7 +3,8 @@ from pathlib import Path
 import astrbot.core.message.components as Comp
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.star import Context, Star, register, StarTools
-from astrbot.api import logger
+from astrbot.api import logger, AstrBotConfig
+from .script.get_img import set_custom_font_path
 from .script.get_server_info import get_server_status
 from .script.get_img import generate_server_info_image
 from .script.bar_chart import generate_bar_chart_image
@@ -67,15 +68,21 @@ mchelp
 class MyPlugin(Star):
     """Minecraft服务器信息查询插件"""
     
-    def __init__(self, context: Context):
+    def __init__(self, context: Context, config: AstrBotConfig = None):
         """
         初始化插件
 
         Args:
             context: 插件上下文
+            config: 插件配置（来自 _conf_schema.json）
         """
         super().__init__(context)
         logger.info("MyPlugin 初始化完成")
+        # 应用自定义字体配置（未配置则使用系统默认加载逻辑）
+        font_path = (config or {}).get("font_path", "") if config else ""
+        set_custom_font_path(font_path)
+        if font_path:
+            logger.info(f"已设置自定义字体: {font_path}")
         # 启动每小时柱状图数据采样后台任务（单例，默认对所有已配置服务器启用）
         self._trend_task: Optional[asyncio.Task] = None
         if getattr(self, "_trend_task", None) is None:

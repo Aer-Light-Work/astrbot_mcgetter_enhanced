@@ -1,0 +1,8 @@
+{
+  "font_path": {
+    "description": "自定义字体文件路径",
+    "type": "string",
+    "default": "",
+    "hint": "指定 .ttf / .ttc 字体文件路径。留空则使用系统默认加载逻辑（内置 msyh.ttf / 系统字体 / PIL 默认字体）。"
+  }
+}

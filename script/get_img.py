@@ -7,12 +7,71 @@ from typing import Optional, List, Tuple
 from astrbot.api import logger
 
 from .get_server_info import (
-    TextSegment, MotdLine, parse_custom_note_text, MC_COLOR_CODES
+    TextSegment, MotdLine, parse_custom_note_text, parse_section_sign_text, MC_COLOR_CODES
 )
 from .preset_manager import get_preset_manager
 
+# 自定义字体文件路径（可通过 set_custom_font_path 设置，默认为空使用系统加载逻辑）
+_custom_font_path: Optional[str] = None
+_custom_bold_font_path: Optional[str] = None
 
-async def load_font(font_size):
+
+def set_custom_font_path(font_path: Optional[str], bold_font_path: Optional[str] = None) -> None:
+    """
+    设置自定义字体路径，None/空字符串 则恢复系统默认加载逻辑
+    bold_font_path: 粗体字体文件路径（可选）。未指定时自动在同目录下查找 SemiBold/Bold 变体
+    """
+    global _custom_font_path, _custom_bold_font_path
+    if font_path:
+        _custom_font_path = str(font_path)
+        if bold_font_path:
+            _custom_bold_font_path = str(bold_font_path)
+        else:
+            _custom_bold_font_path = _guess_bold_font_path(str(font_path))
+    else:
+        _custom_font_path = None
+        _custom_bold_font_path = None
+
+
+def _guess_bold_font_path(regular_path: str) -> Optional[str]:
+    """从常规字体路径猜测同目录下的粗体变体（SemiBold / Bold）"""
+    try:
+        base = Path(regular_path)
+        directory = base.parent
+        if not directory.exists():
+            return None
+        # 取常规字体名前缀（去掉 Regular 等后缀）
+        prefix = base.stem.replace("-Regular", "").replace("Regular", "").strip("-")
+        for pattern in (
+            f"*{prefix}*SemiBold*",
+            f"*{prefix}*Bold*",
+            f"*SemiBold*",
+            f"*Bold*",
+        ):
+            matches = sorted(directory.glob(pattern))
+            if matches:
+                return str(matches[0])
+    except Exception:
+        pass
+    return None
+
+
+async def load_font(font_size, bold: bool = False):
+    """加载字体，bold=True 时优先加载粗体字体文件"""
+    # 粗体：优先使用粗体字体文件
+    if bold and _custom_bold_font_path:
+        try:
+            return ImageFont.truetype(_custom_bold_font_path, font_size)
+        except OSError as e:
+            logger.warning(f"粗体字体加载失败: {_custom_bold_font_path}: {e}，回退到常规字体")
+
+    # 用户自定义字体路径优先
+    if _custom_font_path:
+        try:
+            return ImageFont.truetype(_custom_font_path, font_size)
+        except OSError as e:
+            logger.warning(f"自定义字体加载失败: {_custom_font_path}: {e}，回退到系统默认字体")
+
     # 尝试多路径加载
     font_paths = [
         Path(__file__).resolve().parent.parent / 'resource' / 'msyh.ttf',
@@ -71,8 +130,8 @@ def measure_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont
 
 
 def _seg_width(draw: ImageDraw.ImageDraw, seg: TextSegment, font: ImageFont.ImageFont) -> int:
-    """单个文本段宽度（粗体额外+1像素模拟）"""
-    return measure_text(draw, seg.text, font) + (1 if seg.bold else 0)
+    """单个文本段宽度（粗体额外+2像素模拟）"""
+    return measure_text(draw, seg.text, font) + (2 if seg.bold else 0)
 
 
 def draw_segments(
@@ -81,10 +140,11 @@ def draw_segments(
     segments: List[TextSegment],
     font: ImageFont.ImageFont,
     default_color: Tuple[int, int, int],
+    bold_font: Optional[ImageFont.ImageFont] = None,
 ) -> int:
     """
     绘制带格式的文本段，返回绘制后的 x 坐标
-    粗体通过双次绘制模拟；下划线/删除线用线条绘制
+    粗体优先使用粗体字体文件（bold_font），否则回退描边模拟；下划线/删除线用线条绘制
     """
     current_x = x
     for seg in segments:
@@ -93,10 +153,17 @@ def draw_segments(
 
         color = seg.color if seg.color else default_color
 
-        draw.text((current_x, y), seg.text, font=font, fill=color)
-        if seg.bold:
-            # 模拟粗体：右移1像素再绘制一次
-            draw.text((current_x + 1, y), seg.text, font=font, fill=color)
+        if seg.bold and bold_font is not None:
+            # 使用真正的粗体字体文件渲染
+            draw.text((current_x, y), seg.text, font=bold_font, fill=color)
+        elif seg.bold:
+            # 回退：描边模拟粗体（无粗体字体文件时）
+            draw.text(
+                (current_x, y), seg.text, font=font, fill=color,
+                stroke_width=1, stroke_fill=color,
+            )
+        else:
+            draw.text((current_x, y), seg.text, font=font, fill=color)
 
         text_width = measure_text(draw, seg.text, font)
 
@@ -116,7 +183,7 @@ def draw_segments(
                 fill=color, width=1
             )
 
-        current_x += text_width + (1 if seg.bold else 0)
+        current_x += text_width + (2 if seg.bold else 0)
 
     return current_x
 
@@ -127,11 +194,12 @@ def draw_segments_centered(
     segments: List[TextSegment],
     font: ImageFont.ImageFont,
     default_color: Tuple[int, int, int],
+    bold_font: Optional[ImageFont.ImageFont] = None,
 ) -> int:
     """居中绘制文本段"""
     total_width = sum(_seg_width(draw, seg, font) for seg in segments if seg.text)
     start_x = center_x - total_width // 2
-    return draw_segments(draw, start_x, y, segments, font, default_color)
+    return draw_segments(draw, start_x, y, segments, font, default_color, bold_font)
 
 
 def draw_segments_right_aligned(
@@ -140,11 +208,12 @@ def draw_segments_right_aligned(
     segments: List[TextSegment],
     font: ImageFont.ImageFont,
     default_color: Tuple[int, int, int],
+    bold_font: Optional[ImageFont.ImageFont] = None,
 ) -> int:
     """右对齐绘制文本段"""
     total_width = sum(_seg_width(draw, seg, font) for seg in segments if seg.text)
     start_x = right_x - total_width
-    return draw_segments(draw, start_x, y, segments, font, default_color)
+    return draw_segments(draw, start_x, y, segments, font, default_color, bold_font)
 
 
 def wrap_segments_to_lines(
@@ -198,6 +267,37 @@ def wrap_segments_to_lines(
 
     if current_line:
         lines.append(current_line)
+
+    return lines
+
+
+def split_segments_by_newline(segments: List[TextSegment]) -> List[List[TextSegment]]:
+    """将带 \\n 的 segments 按换行符拆分为多行，保留各段颜色/格式"""
+    lines: List[List[TextSegment]] = []
+    current: List[TextSegment] = []
+
+    for seg in segments:
+        if "\n" in seg.text:
+            parts = seg.text.split("\n")
+            for i, part in enumerate(parts):
+                if part:
+                    current.append(TextSegment(
+                        text=part,
+                        color=seg.color,
+                        bold=seg.bold,
+                        italic=seg.italic,
+                        underline=seg.underline,
+                        strikethrough=seg.strikethrough,
+                    ))
+                if i < len(parts) - 1:
+                    if current:
+                        lines.append(current)
+                        current = []
+        else:
+            current.append(seg)
+
+    if current:
+        lines.append(current)
 
     return lines
 
@@ -411,13 +511,17 @@ async def _generate_rich_image(
     丰富样式布局（参考图）：
     ┌────────────────────────────────────────────┐
     │              -群名称-（居中加粗大字）          │
-    │ [图标] 服务器名称(加粗)          4/23333(加粗) │
-    │        MOTD行1                  版本号(加粗)  │
-    │        MOTD行2                  延迟(加粗)    │
+    │ [图标] 服务器名称(加粗)          4/23333     │
+    │        MOTD行1                  版本号       │
+    │        MOTD行2                  延迟         │
     │ 玩家1                                        │
     │ 玩家2                                        │
-    │                          2026-08-16 18:00:35 │
+    │                         2026-08-16 18:00:35 │
     └────────────────────────────────────────────┘
+    MOTD 说明：单行过长会自动按左栏可用宽度折行；
+               多行(\n)各行分别折行，依次向下排列。
+    说明：图标为直角（无圆角）、与左侧文本垂直居中对齐；
+         在线人数与版本/延迟同字号；时间戳粗体贴右下角。
     """
     if preset is None:
         preset = get_preset_manager().get_preset("rich")
@@ -438,19 +542,24 @@ async def _generate_rich_image(
     TIMESTAMP_COLOR = tuple(colors.get("timestamp", [120, 120, 120]))
 
     group_title_size = fonts_cfg.get("group_title_size", 44)
-    title_size = fonts_cfg.get("title_size", 36)
-    text_size = fonts_cfg.get("text_size", 22)
+    title_size = fonts_cfg.get("title_size", 26)      # 服务器别名大小（与 MOTD 差距不宜过大）
+    text_size = fonts_cfg.get("text_size", 22)        # MOTD / 版本 / 延迟 大小
     small_size = fonts_cfg.get("small_size", 18)
 
-    img_width = layout_cfg.get("width", 800)
+    img_width = layout_cfg.get("width", 1177)
     padding = layout_cfg.get("padding", 30)
-    icon_size = layout_cfg.get("icon_size", 80)
+    icon_size = layout_cfg.get("icon_size", 100)
     line_spacing = layout_cfg.get("line_spacing", 8)
 
     group_title_font = await load_font(group_title_size)
     title_font = await load_font(title_size)
     text_font = await load_font(text_size)
     small_font = await load_font(small_size)
+    # 粗体字体（优先使用粗体字体文件，未配置时回退描边模拟）
+    group_title_bold_font = await load_font(group_title_size, bold=True)
+    title_bold_font = await load_font(title_size, bold=True)
+    text_bold_font = await load_font(text_size, bold=True)
+    small_bold_font = await load_font(small_size, bold=True)
 
     # 服务器图标（无图标时用默认图标占位）
     server_icon = load_default_icon() if not display.get("show_icon", True) is False else None
@@ -466,30 +575,78 @@ async def _generate_rich_image(
     motd_lines = motd_lines or []
     show_motd = display.get("show_motd", True)
 
+    # 左栏文本起始 x（名称/MOTD 区域）
+    name_x = padding + icon_size + 15 if server_icon else padding
+    # 右栏（人数/版本/延迟）右对齐的右边界
+    right_x = img_width - padding
+    # 动态测量右栏最大文本宽度（人数/版本/延迟，均为 text_font）
+    tmp_measure_img = Image.new("RGB", (img_width, 10), color=BG_COLOR)
+    tmp_measure_draw = ImageDraw.Draw(tmp_measure_img)
+    right_col_width = max(
+        measure_text(tmp_measure_draw, f"{plays_online}/{plays_max}", text_font),
+        measure_text(tmp_measure_draw, server_version, text_font),
+        measure_text(tmp_measure_draw, f"{latency}ms", text_font),
+    )
+    # 左栏 MOTD 最大可用宽度：不超过右栏左边界，并预留 20px 间隔，
+    # 避免 MOTD 过长时波及右侧版本号和延迟
+    motd_max_width = max(60, (right_x - right_col_width - 20) - name_x)
+    # 对 MOTD 折行：单行过长自动换行到下一行，多行(\n)各行分别折行
+    motd_wrapped_lines: List[List[TextSegment]] = []
+    if show_motd:
+        tmp_img = Image.new("RGB", (img_width, 10), color=BG_COLOR)
+        tmp_draw = ImageDraw.Draw(tmp_img)
+        for motd_line in motd_lines:
+            motd_wrapped_lines.extend(
+                wrap_segments_to_lines(tmp_draw, motd_line.segments, text_font, motd_max_width)
+            )
+
     # 行高
+    #   name_line_h = title_size + line_spacing   （别名行高）
+    #   motd_line_h = text_size + line_spacing    （每行 MOTD 行高）
+    # 头部文本总高 = name_line_h + 2 * motd_line_h（右栏版本+延迟占两行）
+    #   → 默认值 = (26+8) + 2*(22+8) = 94
+    # layout/icon_size 建议设为略大于该总高（默认取 100），
+    # 图标与文本会自动在头部区域内垂直居中。
+    # 调整方法：先改 fonts/title_size、fonts/text_size、layout/line_spacing，
+    # 再按上式计算总高并更新 layout/icon_size。
     name_line_h = title_size + line_spacing
     motd_line_h = text_size + line_spacing
     small_line_h = small_size + 6
 
-    # 头部区域行数：名称行 + max(MOTD行数, 2)（右栏版本+延迟占两行）
-    header_text_h = name_line_h + max(len(motd_lines) if show_motd else 0, 2) * motd_line_h
+    # 头部区域行数：名称行 + max(MOTD折行后总行数, 2)（右栏版本+延迟占两行）
+    header_text_h = name_line_h + max(len(motd_wrapped_lines), 2) * motd_line_h
     header_h = max(icon_size, header_text_h)
+    # 图标与文本在头部区域内垂直居中偏移量
+    header_text_offset_y = (header_h - header_text_h) // 2
+    header_icon_offset_y = (header_h - icon_size) // 2
 
     # 底部区域（玩家列表/备注）
     bottom_lines: List[List[TextSegment]] = []
     if note_segments:
         tmp_img = Image.new("RGB", (img_width, 10), color=BG_COLOR)
         tmp_draw = ImageDraw.Draw(tmp_img)
-        bottom_lines = wrap_segments_to_lines(
-            tmp_draw, note_segments, small_font, img_width - 2 * padding - 20
-        )
+        # 先按 \n 拆分为多行，再对每行按宽度折行
+        note_lines = split_segments_by_newline(note_segments)
+        for note_line in note_lines:
+            bottom_lines.extend(
+                wrap_segments_to_lines(
+                    tmp_draw, note_line, small_font, img_width - 2 * padding - 20
+                )
+            )
     elif display.get("show_players", True):
         players = players_list or []
         max_items = 10
         shown = players[:max_items]
         if shown:
             for name in shown:
-                bottom_lines.append([TextSegment(text=name, color=TEXT_COLOR)])
+                # 玩家名可能包含 § 颜色/格式代码，需要正常解析渲染
+                if "§" in name:
+                    # 只有颜色/格式代码没有文本时（如 §7），parse 返回空列表，
+                    # 渲染为空行（遵循原版规律，行高保留）
+                    name_segments = parse_section_sign_text(name)
+                else:
+                    name_segments = [TextSegment(text=name, color=TEXT_COLOR)]
+                bottom_lines.append(name_segments)
             if len(players) > max_items:
                 bottom_lines.append([TextSegment(
                     text=f"…… 等共 {len(players)} 名玩家", color=TIMESTAMP_COLOR
@@ -510,7 +667,7 @@ async def _generate_rich_image(
         + header_h
         + 14                      # 头部与底部间隔
         + bottom_h
-        + (small_size + 12 if display.get("show_query_time", True) else 0)
+        + (small_size + 10 if display.get("show_query_time", True) else 0)
         + padding
     )
     img_height = total_height
@@ -527,6 +684,7 @@ async def _generate_rich_image(
             draw, img_width // 2, y,
             [TextSegment(text=group_name, color=TITLE_COLOR, bold=True)],
             group_title_font, TITLE_COLOR,
+            group_title_bold_font,
         )
         y += group_title_h
 
@@ -534,62 +692,69 @@ async def _generate_rich_image(
     header_top = y
 
     if server_icon:
-        icon_mask = Image.new("L", (icon_size, icon_size), 0)
-        mask_draw = ImageDraw.Draw(icon_mask)
-        mask_draw.rounded_rectangle((0, 0, icon_size, icon_size), radius=12, fill=255)
+        # 直角图标（无圆角）：以自身 alpha 通道作为蒙版直接粘贴
         server_icon_resized = server_icon.resize((icon_size, icon_size))
-        img.paste(server_icon_resized, (padding, header_top), icon_mask)
+        img.paste(
+            server_icon_resized, (padding, header_top + header_icon_offset_y),
+            server_icon_resized,
+        )
 
-    name_x = padding + icon_size + 15 if server_icon else padding
+    text_top = header_top + header_text_offset_y
 
     # 左栏：服务器名称（加粗）
     draw_segments(
-        draw, name_x, header_top,
+        draw, name_x, text_top,
         [TextSegment(text=server_name, color=TITLE_COLOR, bold=True)],
         title_font, TITLE_COLOR,
+        title_bold_font,
     )
 
-    # 左栏：MOTD 行（紧跟名称行下方，与原版MC一致的行高）
+    # 左栏：MOTD 行（紧跟名称行下方；过长已按 motd_max_width 折行）
     if show_motd:
-        for i, motd_line in enumerate(motd_lines):
+        for i, line_segs in enumerate(motd_wrapped_lines):
             draw_segments(
-                draw, name_x, header_top + name_line_h + i * motd_line_h,
-                motd_line.segments, text_font, TEXT_COLOR,
+                draw, name_x, text_top + name_line_h + i * motd_line_h,
+                line_segs, text_font, TEXT_COLOR,
+                text_bold_font,
             )
 
-    # 右栏：在线人数（加粗）、版本号（加粗）、延迟（加粗）
+    # 右栏：在线人数、版本号、延迟（均用 text_font，与版本/延迟保持同字号）
     draw_segments_right_aligned(
-        draw, right_x, header_top,
+        draw, right_x, text_top,
         [TextSegment(text=f"{plays_online}/{plays_max}", color=PLAYER_COUNT_COLOR, bold=True)],
-        title_font, PLAYER_COUNT_COLOR,
+        text_font, PLAYER_COUNT_COLOR,
+        text_bold_font,
     )
     draw_segments_right_aligned(
-        draw, right_x, header_top + name_line_h,
+        draw, right_x, text_top + name_line_h,
         [TextSegment(text=server_version, color=VERSION_COLOR, bold=True)],
         text_font, VERSION_COLOR,
+        text_bold_font,
     )
     latency_color = LATENCY_GOOD if latency < 100 else LATENCY_WARN if latency < 200 else LATENCY_BAD
     draw_segments_right_aligned(
-        draw, right_x, header_top + name_line_h + motd_line_h,
+        draw, right_x, text_top + name_line_h + motd_line_h,
         [TextSegment(text=f"{latency}ms", color=latency_color, bold=True)],
         text_font, latency_color,
+        text_bold_font,
     )
 
     y = header_top + header_h + 14
 
     # 3. 底部区域：玩家列表（每人一行）/ 备注
     for line_segs in bottom_lines:
-        draw_segments(draw, padding + 5, y, line_segs, small_font, TEXT_COLOR)
+        draw_segments(draw, padding + 5, y, line_segs, small_font, TEXT_COLOR, small_bold_font)
         y += small_line_h
 
-    # 4. 查询时间（右下角）
+    # 4. 查询时间（右下角，粗体，减短右下留白更贴近边缘）
     if display.get("show_query_time", True):
         from datetime import datetime
         time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         draw_segments_right_aligned(
-            draw, right_x, img_height - padding - small_size,
-            [TextSegment(text=time_str, color=TIMESTAMP_COLOR)],
+            draw, img_width - 10, img_height - small_size - 6,
+            [TextSegment(text=time_str, color=TIMESTAMP_COLOR, bold=True)],
             small_font, TIMESTAMP_COLOR,
+            small_bold_font,
         )
 
     buffer = io.BytesIO()

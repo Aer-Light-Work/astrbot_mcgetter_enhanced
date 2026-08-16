@@ -1,37 +1,23 @@
 #!/usr/bin/env python3
 """
-单元测试脚本：测试 presets 系统的各个组件
+图片生成 mock 测试（不依赖真实网络）
+测试 presets 系统的各个组件与多种样式图片的生成
 """
 
 import asyncio
 import sys
 import os
+import io
 import base64
 from pathlib import Path
 
 # 添加项目根目录到路径
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-# 模拟 astrbot 模块（测试环境不需要真实的 astrbot）
-class MockLogger:
-    def info(self, msg): print(f"[INFO] {msg}")
-    def warning(self, msg): print(f"[WARN] {msg}")
-    def error(self, msg): print(f"[ERROR] {msg}")
-    def debug(self, msg): pass
-
-class MockAstrbot:
-    class api:
-        logger = MockLogger()
-    class core:
-        class message:
-            class components:
-                pass
-
-sys.modules['astrbot'] = MockAstrbot
-sys.modules['astrbot.api'] = MockAstrbot.api
-sys.modules['astrbot.core'] = MockAstrbot.core
-sys.modules['astrbot.core.message'] = MockAstrbot.core.message
-sys.modules['astrbot.core.message.components'] = MockAstrbot.core.message.components
+# 使用公共 astrbot mock
+from mock_astrbot import setup_mock_astrbot
+setup_mock_astrbot()
 
 from script.get_server_info import (
     parse_section_sign_text,
@@ -40,9 +26,13 @@ from script.get_server_info import (
     parse_mc_color,
     TextSegment,
     MotdLine,
-    get_server_status,
 )
 from script.preset_manager import get_preset_manager, PresetManager
+from script.get_img import (
+    generate_server_info_image, load_font, wrap_segments_to_lines,
+    set_custom_font_path,
+)
+from PIL import Image, ImageDraw
 
 
 def test_parse_section_sign_text():
@@ -202,12 +192,11 @@ async def test_preset_manager():
 
 
 async def test_generate_rich_image():
-    """测试生成 rich 样式图片"""
+    """测试生成 rich 样式图片（mock，不依赖网络）"""
     print("=" * 60)
     print("测试: 生成 rich 样式图片")
     print("=" * 60)
 
-    from script.get_img import generate_server_info_image
     from script.get_server_info import parse_motd
 
     # 模拟 MOTD
@@ -237,6 +226,11 @@ async def test_generate_rich_image():
     img_data = base64.b64decode(img_b64)
     print(f"图片大小: {len(img_data)} bytes")
 
+    # 校验 rich 图片宽度为 1177px
+    img = Image.open(io.BytesIO(img_data))
+    print(f"图片尺寸: {img.size[0]}x{img.size[1]}")
+    assert img.size[0] == 1177, f"rich 图片宽度应为 1177，实际为 {img.size[0]}"
+
     # 保存图片到文件
     output_path = Path(__file__).resolve().parent / "test_output_rich.png"
     with open(output_path, "wb") as f:
@@ -244,13 +238,122 @@ async def test_generate_rich_image():
     print(f"✓ rich 样式图片已保存到: {output_path}\n")
 
 
+async def test_generate_rich_image_with_long_motd():
+    """测试超长单行 MOTD 自动折行（mock，不依赖网络）"""
+    print("=" * 60)
+    print("测试: 超长单行 MOTD 自动折行")
+    print("=" * 60)
+
+    from script.get_server_info import parse_motd
+
+    # 超长单行 MOTD（确定为 992px 左栏宽度的数倍，保证必然折行）
+    motd_text = (
+        "这是一个非常非常长的服务器描述文本用于测试自动换行功能是否正常工作"
+        "当文本超出左栏宽度限制时应该自动换行到下一行显示以避免文字溢出图片边界"
+        "同时保证多行换行后的每一行都保持原有颜色和格式信息不丢失"
+    )
+    motd_lines = parse_motd(motd_text)
+    assert len(motd_lines) == 1, "该测试用例应为单行 MOTD"
+
+    # 直接验证折行逻辑：使用与 _generate_rich_image 相同的参数计算
+    # 左栏 MOTD 最大宽度 = (img_width - padding) - name_x - 10
+    #   name_x = padding + icon_size + 15 = 30 + 100 + 15 = 145
+    #   motd_max_width = (1177 - 30) - 145 - 10 = 992
+    text_font = await load_font(22)
+    tmp_img = Image.new("RGB", (1177, 10))
+    tmp_draw = ImageDraw.Draw(tmp_img)
+    motd_max_width = 992
+    wrapped = wrap_segments_to_lines(
+        tmp_draw, motd_lines[0].segments, text_font, motd_max_width
+    )
+    print(f"折行后行数: {len(wrapped)}")
+    for i, line in enumerate(wrapped):
+        print(f"  行{i}: {''.join(s.text for s in line)}")
+
+    # 超长单行 MOTD 应被折成多行
+    assert len(wrapped) > 1, f"超长单行 MOTD 应折行为多行，实际为 {len(wrapped)} 行"
+
+    # 生成图片（折行后高度应大于原始单行的等效高度）
+    img_b64 = await generate_server_info_image(
+        players_list=[],
+        latency=36,
+        server_name="长MOTD测试服务器",
+        plays_max=114514,
+        plays_online=3,
+        server_version="1.20.4",
+        icon_base64=None,
+        host_address="test.example.com",
+        preset_name="rich",
+        motd_lines=motd_lines,
+        note_text=None,
+        group_name=None,
+    )
+
+    assert img_b64 is not None
+    img_data = base64.b64decode(img_b64)
+    img = Image.open(io.BytesIO(img_data))
+    print(f"图片尺寸: {img.size[0]}x{img.size[1]}")
+    assert img.size[0] == 1177, f"图片宽度应为 1177，实际为 {img.size[0]}"
+    # 无群名、无玩家的 1 行 MOTD 基线高度 = 30+100+14+24+28+30 = 226
+    # 折行后高度应大于基线（3 行 MOTD 实际为 250）
+    assert img.size[1] > 226, f"长 MOTD 折行后图片高度应大于基线 226，实际为 {img.size[1]}"
+
+    # 保存图片到文件
+    output_path = Path(__file__).resolve().parent / "test_output_rich_long_motd.png"
+    with open(output_path, "wb") as f:
+        f.write(img_data)
+    print(f"✓ 超长单行 MOTD 折行图片已保存到: {output_path}\n")
+
+
+async def test_custom_font():
+    """测试自定义字体路径（使用 tests/SarasaUiSC-Regular.ttf，mock 不依赖网络）"""
+    print("=" * 60)
+    print("测试: 自定义字体")
+    print("=" * 60)
+
+    custom_font = Path(__file__).resolve().parent / "SarasaUiSC-Regular.ttf"
+    assert custom_font.exists(), f"测试字体不存在: {custom_font}"
+
+    # 设置自定义字体
+    set_custom_font_path(str(custom_font))
+    try:
+        # 验证字体能正常加载
+        test_font = await load_font(22)
+        assert test_font is not None, "自定义字体加载失败"
+
+        # 使用自定义字体生成图片
+        img_b64 = await generate_server_info_image(
+            players_list=["Player1", "Player2"],
+            latency=20,
+            server_name="字体测试",
+            plays_max=100,
+            plays_online=2,
+            server_version="1.20.4",
+            icon_base64=None,
+            host_address="font.example.com",
+            preset_name="rich",
+            motd_lines=None,
+            note_text=None,
+            group_name="字体测试群",
+        )
+        assert img_b64 is not None, "自定义字体图片生成失败"
+        img_data = base64.b64decode(img_b64)
+        print(f"图片大小: {len(img_data)} bytes")
+
+        output_path = Path(__file__).resolve().parent / "test_output_custom_font.png"
+        with open(output_path, "wb") as f:
+            f.write(img_data)
+        print(f"✓ 自定义字体图片已保存到: {output_path}\n")
+    finally:
+        # 恢复系统默认字体逻辑
+        set_custom_font_path(None)
+
+
 async def test_generate_simple_image():
-    """测试生成 simple 样式图片"""
+    """测试生成 simple 样式图片（mock，不依赖网络）"""
     print("=" * 60)
     print("测试: 生成 simple 样式图片")
     print("=" * 60)
-
-    from script.get_img import generate_server_info_image
 
     players = ["Player1", "Player2"]
 
@@ -280,12 +383,10 @@ async def test_generate_simple_image():
 
 
 async def test_generate_with_note():
-    """测试带备注的图片生成"""
+    """测试带备注的图片生成（mock，不依赖网络）"""
     print("=" * 60)
     print("测试: 带备注的图片生成")
     print("=" * 60)
-
-    from script.get_img import generate_server_info_image
 
     note = "§a§l本服拥有专属私人房间系统§r\n§6支持公开房间模式 §b同时支持创建私人房间"
     img_b64 = await generate_server_info_image(
@@ -314,12 +415,10 @@ async def test_generate_with_note():
 
 
 async def test_generate_with_color_tag_note():
-    """测试带 <color:#hex> 标签的备注"""
+    """测试带 <color:#hex> 标签的备注（mock，不依赖网络）"""
     print("=" * 60)
     print("测试: 带 <color:#hex> 标签的备注")
     print("=" * 60)
-
-    from script.get_img import generate_server_info_image
 
     note = "<color:#FF55FF>品红色文字</color> <color:#FFFF55>黄色文字</color> §l粗体文字"
     img_b64 = await generate_server_info_image(
@@ -349,7 +448,7 @@ async def test_generate_with_color_tag_note():
 
 async def main():
     print("\n" + "=" * 60)
-    print("  MC Server Status Plugin - Presets 系统单元测试")
+    print("  MC Server Status Plugin - 图片生成 mock 测试")
     print("=" * 60 + "\n")
 
     # 单元测试
@@ -361,6 +460,8 @@ async def main():
 
     # 图片生成测试
     await test_generate_rich_image()
+    await test_generate_rich_image_with_long_motd()
+    await test_custom_font()
     await test_generate_simple_image()
     await test_generate_with_note()
     await test_generate_with_color_tag_note()

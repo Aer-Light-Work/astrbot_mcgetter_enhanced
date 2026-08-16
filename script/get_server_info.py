@@ -379,8 +379,7 @@ async def get_server_status(host):
         if host == csu_host:
                 players_list = await fetch_players_names(csu_get_players)
                 
-        # 对玩家列表进行字母顺序排序
-        players_list.sort()
+        # 保持服务器返回的玩家原顺序，不进行重排
 
         # 解析 MOTD
         motd_lines = parse_motd(status.description)

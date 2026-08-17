@@ -201,10 +201,26 @@ def _parse_component_dict(comp: Dict[str, Any], default_color: Optional[Tuple[in
     return segments
 
 
+_HASHESX = "0123456789abcdef"
+
+
+def parse_hex_color(digits: str) -> Optional[Tuple[int, int, int]]:
+    """将 6 位十六进制字符串（RRGGBB）解析为 RGB 元组"""
+    digits = digits.lower()
+    if len(digits) == 6 and all(ch in _HASHESX for ch in digits):
+        return (
+            int(digits[0:2], 16),
+            int(digits[2:4], 16),
+            int(digits[4:6], 16),
+        )
+    return None
+
+
 def parse_section_sign_text(text: str, default_color: Optional[Tuple[int, int, int]] = None) -> List[TextSegment]:
     """
     解析包含 § 格式代码的文本
-    §0-§f: 颜色
+    §0-§f: 旧版固定颜色代码
+    §#RRGGBB: 1.16+ 十六进制颜色（支持更多颜色）
     §k: 随机字符(obfuscated, 忽略)
     §l: 粗体
     §m: 删除线
@@ -238,24 +254,42 @@ def parse_section_sign_text(text: str, default_color: Optional[Tuple[int, int, i
         if text[i] == "§" and i + 1 < len(text):
             flush()
             code = text[i + 1].lower()
-            if code in MC_COLOR_CODES:
+            if code == "#" and i + 7 < len(text):
+                # 1.16+ 十六进制颜色：§#RRGGBB，例如 §#ffcd1a → (255,205,26)
+                hex_raw = text[i + 2:i + 8]
+                if len(hex_raw) == 6 and all(ch.lower() in _HASHESX for ch in hex_raw):
+                    rgb = parse_hex_color(hex_raw)
+                    if rgb is not None:
+                        current_color = rgb
+                        i += 8
+                        continue
+                # 解析失败按普通字符处理 §#
+                i += 2
+            elif code in MC_COLOR_CODES:
                 current_color = MC_COLOR_CODES[code]
+                i += 2
             elif code == "l":
                 current_bold = True
+                i += 2
             elif code == "m":
                 current_strikethrough = True
+                i += 2
             elif code == "n":
                 current_underline = True
+                i += 2
             elif code == "o":
                 current_italic = True
+                i += 2
             elif code == "r":
                 current_color = default_color
                 current_bold = False
                 current_italic = False
                 current_underline = False
                 current_strikethrough = False
-            # §k (obfuscated) 忽略
-            i += 2
+                i += 2
+            else:
+                # §k (obfuscated) 及其他未识别代码忽略
+                i += 2
         else:
             current_text.append(text[i])
             i += 1

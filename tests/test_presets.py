@@ -77,6 +77,19 @@ def test_parse_section_sign_text():
     assert segments[1].color == (255, 85, 85) and segments[1].italic is True
     print("✓ 组合测试通过\n")
 
+    # 测试 1.16+ 十六进制颜色 §#RRGGBB（渐变色）
+    text = "§#ffcd1a我§#ffbf26能§#ffb032吞§#ffa23e下§#ff934a玻§#ff8556璃§#ff7661而§#ff686d不§#ff5979伤§#ff4b85身§#ff3c91体§#ff2e9d。"
+    segments = parse_section_sign_text(text)
+    print(f"输入: {repr(text[:20])}...")
+    for seg in segments:
+        print(f"  段: text={repr(seg.text)}, color={seg.color}")
+    assert len(segments) == 12
+    assert segments[0].text == "我"
+    assert segments[0].color == (255, 205, 26)  # #ffcd1a
+    assert segments[-1].text == "。"
+    assert segments[-1].color == (255, 46, 157)  # #ff2e9d
+    print("✓ §#RRGGBB 十六进制颜色(渐变)测试通过\n")
+
     # 测试无格式代码
     text = "普通文字"
     segments = parse_section_sign_text(text)
@@ -446,6 +459,39 @@ async def test_generate_with_color_tag_note():
     print(f"✓ 颜色标签备注图片已保存到: {output_path}\n")
 
 
+async def test_generate_hex_gradient():
+    """测试十六进制渐变色渲染图片（mock，不依赖网络）"""
+    print("=" * 60)
+    print("测试: 十六进制渐变色渲染图片")
+    print("=" * 60)
+
+    # 用户提供的渐变色十六进制文本
+    note = "§#ffcd1a我§#ffbf26能§#ffb032吞§#ffa23e下§#ff934a玻§#ff8556璃§#ff7661而§#ff686d不§#ff5979伤§#ff4b85身§#ff3c91体§#ff2e9d。"
+    img_b64 = await generate_server_info_image(
+        players_list=[],
+        latency=10,
+        server_name="渐变色测试",
+        plays_max=100,
+        plays_online=5,
+        server_version="1.20.4",
+        icon_base64=None,
+        host_address="gradient.example.com",
+        preset_name="rich",
+        motd_lines=None,
+        note_text=note,
+        group_name="渐变色测试群",
+        display_override={"show_notes": True},
+    )
+
+    assert img_b64 is not None
+    img_data = base64.b64decode(img_b64)
+
+    output_path = Path(__file__).resolve().parent / "test_output_hex_gradient.png"
+    with open(output_path, "wb") as f:
+        f.write(img_data)
+    print(f"✓ 十六进制渐变色图片已保存到: {output_path}\n")
+
+
 async def main():
     print("\n" + "=" * 60)
     print("  MC Server Status Plugin - 图片生成 mock 测试")
@@ -465,6 +511,7 @@ async def main():
     await test_generate_simple_image()
     await test_generate_with_note()
     await test_generate_with_color_tag_note()
+    await test_generate_hex_gradient()
 
     print("=" * 60)
     print("  所有测试通过！✓")

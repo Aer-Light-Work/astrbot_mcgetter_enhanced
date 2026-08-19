@@ -21,7 +21,7 @@ setup_mock_astrbot()
 
 from script.get_server_info import (
     parse_section_sign_text,
-    parse_motd,
+    parse_with_mcstatus,
     parse_custom_note_text,
     parse_mc_color,
     TextSegment,
@@ -146,7 +146,7 @@ def test_parse_motd():
 
     # 测试纯字符串 MOTD
     motd = "§a第一行\n§c第二行"
-    lines = parse_motd(motd)
+    lines = manual_parse_motd(motd)
     print(f"输入: {repr(motd)}")
     print(f"  行数: {len(lines)}")
     for i, line in enumerate(lines):
@@ -166,7 +166,7 @@ def test_parse_motd():
             {"text": "World", "color": "red", "bold": True},
         ]
     }
-    lines = parse_motd(motd_dict)
+    lines = manual_parse_motd(motd_dict)
     print(f"输入: {motd_dict}")
     for i, line in enumerate(lines):
         print(f"  行{i}: {line.plain_text()}")
@@ -210,11 +210,11 @@ async def test_generate_rich_image():
     print("测试: 生成 rich 样式图片")
     print("=" * 60)
 
-    from script.get_server_info import parse_motd
+    from script.get_server_info import manual_parse_motd
 
     # 模拟 MOTD
     motd_text = "§a§l欢迎加入服务器！\n§6§o这是一个测试服务器"
-    motd_lines = parse_motd(motd_text)
+    motd_lines = manual_parse_motd(motd_text)
 
     # 模拟玩家列表（12个，测试超过10个的省略逻辑）
     players = [f"Player{i}" for i in range(1, 11)] + ["LongNamePlayerX", "TestUser"]
@@ -257,7 +257,7 @@ async def test_generate_rich_image_with_long_motd():
     print("测试: 超长单行 MOTD 自动折行")
     print("=" * 60)
 
-    from script.get_server_info import parse_motd
+    from script.get_server_info import manual_parse_motd
 
     # 超长单行 MOTD（确定为 992px 左栏宽度的数倍，保证必然折行）
     motd_text = (
@@ -265,7 +265,7 @@ async def test_generate_rich_image_with_long_motd():
         "当文本超出左栏宽度限制时应该自动换行到下一行显示以避免文字溢出图片边界"
         "同时保证多行换行后的每一行都保持原有颜色和格式信息不丢失"
     )
-    motd_lines = parse_motd(motd_text)
+    motd_lines = manual_parse_motd(motd_text)
     assert len(motd_lines) == 1, "该测试用例应为单行 MOTD"
 
     # 直接验证折行逻辑：使用与 _generate_rich_image 相同的参数计算

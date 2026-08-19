@@ -21,11 +21,10 @@ setup_mock_astrbot()
 from script.get_server_info import get_server_status
 from script.get_img import generate_server_info_image
 
-
 # 用于真实 ping 测试的服务器列表（后续按需追加）
 # 注意：默认地址已去敏感化，实际使用时请替换为真实服务器地址
 PING_TEST_SERVERS = [
-    "example.org"
+    "127.0.0.1:43596",
 ]
 
 
@@ -43,8 +42,9 @@ async def test_ping_server(host: str) -> None:
     print(f"  在线人数:  {result['plays_online']}/{result['plays_max']}")
     print(f"  延迟:      {result['latency']}ms")
     print(f"  MOTD 行数: {len(result['motd_lines'])}")
-    motd_texts = [line.plain_text() for line in result['motd_lines']]
-    print(f"  MOTD:     {' | '.join(motd_texts)}")
+    # motd_texts = [line.plain_text() for line in result['motd_lines']]
+    print(f"Original MOTD: {result['motd_lines']}")
+    # print(f"  MOTD 文本: {' | '.join(motd_texts)}")
     print(f"  玩家:      {result['players_list']}")
 
     # 基本字段断言

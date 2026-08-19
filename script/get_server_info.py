@@ -1,6 +1,10 @@
 import asyncio
 import aiohttp
-from mcstatus import JavaServer
+import mcstatus
+from mcstatus import JavaServer, motd
+from mcstatus.responses.base import BaseStatusResponse
+from mcstatus.responses import java as java_responses
+from mcstatus.motd import components as motd_components
 import socket
 import base64
 from pathlib import Path
@@ -42,6 +46,27 @@ MC_FORMAT_CODES = {
     "r": "reset",
 }
 
+VANILLA_COLOR_NAMES = {
+    "black": (0, 0, 0),
+    "dark_blue": (0, 0, 170),
+    "dark_green": (0, 170, 0),
+    "dark_aqua": (0, 170, 170),
+    "dark_red": (170, 0, 0),
+    "dark_purple": (170, 0, 170),
+    "gold": (255, 170, 0),
+    "gray": (170, 170, 170),
+    "grey": (170, 170, 170),
+    "dark_gray": (85, 85, 85),
+    "dark_grey": (85, 85, 85),
+    "blue": (85, 85, 255),
+    "green": (85, 255, 85),
+    "aqua": (85, 255, 255),
+    "red": (255, 85, 85),
+    "light_purple": (255, 85, 255),
+    "yellow": (255, 255, 85),
+    "white": (255, 255, 255),
+    "reset": None,
+}
 
 @dataclass
 class TextSegment:
@@ -110,7 +135,7 @@ def parse_mc_color(color_str: str) -> Optional[Tuple[int, int, int]]:
     return color_names.get(color_str)
 
 
-def parse_component(component: Any, default_color: Optional[Tuple[int, int, int]] = None) -> List[TextSegment]:
+def parse_component(component: motd.components, default_color: Optional[Tuple[int, int, int]] = None) -> List[TextSegment]:
     """
     递归解析 Minecraft Chat Component 为 TextSegment 列表
     支持 dict 格式和 mcstatus 的 Component 对象
@@ -298,7 +323,118 @@ def parse_section_sign_text(text: str, default_color: Optional[Tuple[int, int, i
     return segments
 
 
-def parse_motd(description: Any) -> List[MotdLine]:
+def parse_with_mcstatus(motd: list[motd_components.ParsedMotdComponent]) -> List[MotdLine]:
+    # debug usage
+    # logger.info(motd)
+
+    lines : List[MotdLine] = []
+
+    if '\n' in motd:
+
+        # This is a really dumb way to iterate and split list into two parts. But it'll work.
+        part1_list : List[motd_components.ParsedMotdComponent] = []
+        part2_list : List[motd_components.ParsedMotdComponent] = []
+        final_list : List[List[motd_components.ParsedMotdComponent]] = []
+
+        passed_changeline = False
+        for member in motd:
+            if (member != '\n') and (passed_changeline == False):
+                part1_list.append(member)
+            elif (member == '\n') and (passed_changeline == False):
+                passed_changeline = True
+            elif passed_changeline:
+                part2_list.append(member)
+
+        final_list.append(part1_list)
+        final_list.append(part2_list)
+
+    else:
+        final_list : List[motd_components.ParsedMotdComponent] = motd
+    
+    current_line_segments : List[TextSegment] = []
+
+    for thisline in final_list:
+        format_indication : motd_components.JavaFormatting | None = None
+        format_flags = {
+            "bold": False,
+            "italic": False,
+            "underline": False,
+            "strikethrough": False
+        }
+        color_indication : Tuple[int, int, int] | None = None
+        default_color: Tuple[int, int, int] = (255, 255, 255)
+
+        for index, seg in enumerate(thisline):
+            if seg.__class__ == motd_components.JavaFormatting:
+                format_indication = seg
+                if seg == motd_components.JavaFormatting.RESET:
+                    format_indication= None
+                    color_indication = default_color
+                    format_flags = {
+                        "bold": False,
+                        "italic": False,
+                        "underline": False,
+                        "strikethrough": False
+                    }
+                elif seg == motd_components.JavaFormatting.BOLD:
+                    format_flags["bold"] = True
+                elif seg == motd_components.JavaFormatting.ITALIC:
+                    format_flags["italic"] = True
+                elif seg == motd_components.JavaFormatting.UNDERLINED:
+                    format_flags["underline"] = True
+                elif seg == motd_components.JavaFormatting.STRIKETHROUGH:
+                    format_flags["strikethrough"] = True
+            elif seg.__class__ == motd_components.JavaMinecraftColor:
+                # 还原 若在格式代码后使用颜色代码则重置格式保留颜色的特性
+                if format_indication != None:
+                    format_indication= None
+                    format_flags = {
+                        "bold": False,
+                        "italic": False,
+                        "underline": False,
+                        "strikethrough": False
+                    }
+
+                color_indication = MC_COLOR_CODES.get(seg)
+            elif seg.__class__ == motd_components.WebColor:
+                # 还原 若在格式代码后使用颜色代码则重置格式保留颜色的特性
+                if format_indication != None:
+                    format_indication= None
+                    format_flags = {
+                        "bold": False,
+                        "italic": False,
+                        "underline": False,
+                        "strikethrough": False
+                    }
+
+                color_indication = seg.rgb
+            elif type(seg) is str:
+                if format_indication == None:
+                    current_line_segments.append(TextSegment(
+                        text=seg,
+                        color=color_indication
+                    ))
+                else:
+                    current_line_segments.append(TextSegment(
+                        text=seg,
+                        color=color_indication,
+                        bold=format_flags.bold,
+                        italic=format_flags.italic,
+                        underline=format_flags.underline,
+                        strikethrough=format_flags.strikethrough
+                    ))
+        
+        lines.append(MotdLine(segments=current_line_segments))
+        current_line_segments = []
+    
+    # 确保至少有一行
+    if not lines:
+        lines.append(MotdLine(segments=[]))
+
+    return lines
+
+
+def manual_parse_motd(description: str) -> List[MotdLine]:
     """
     解析 MOTD 为 MotdLine 列表
     按 \n 分行
@@ -382,14 +518,14 @@ def parse_custom_note_text(text: str) -> List[TextSegment]:
 async def get_server_status(host):
     try:
         # 调用mcstatus获取服务器信息
-        server = await JavaServer.async_lookup(host)
+        server : JavaServer = await JavaServer.async_lookup(host)
         # 使用异步方法查询服务器状态
-        status = await server.async_status()
-        players_list = []
-        latency = int(status.latency)
-        plays_max = status.players.max
-        plays_online = status.players.online
-        server_version = status.version.name
+        status : java_responses.JavaStatusResponse = await server.async_status(version=767)
+        players_list : list = []
+        latency : int = int(status.latency)
+        plays_max : int = status.players.max
+        plays_online : int = status.players.online
+        server_version : str = status.version.name
 
         # 保存服务器图标
         if status.icon:
@@ -413,10 +549,22 @@ async def get_server_status(host):
         if host == csu_host:
                 players_list = await fetch_players_names(csu_get_players)
                 
-        # 保持服务器返回的玩家原顺序，不进行重排
+        # 修改：相较于原版，这里保持服务器返回的玩家原顺序，不进行重排
 
-        # 解析 MOTD
-        motd_lines = parse_motd(status.description)
+        server_motd_object : mcstatus.motd.Motd = status.motd
+        parsed_motd : mcstatus.motd.Motd = server_motd_object.parsed
+        print(parsed_motd)
+        
+
+        # 原版风格的解析，用分节符来标识颜色； Legacy用
+        # vanillastr_server_motd : str = status.motd.to_minecraft()
+
+        # 调用 mcstatus提供的方法来更合理的parse.
+        # 目前先采用其他方法兼容的格式，也就是Vibe出来的MotdLine和Segements
+        motd_lines : List[MotdLine] = parse_with_mcstatus(parsed_motd)
+
+        # Legacy：手工解析 MOTD
+        # motd_lines = manual_parse_motd(vanillastr_server_motd)
         
         return {
             "players_list": players_list,  # 玩家昵称列表

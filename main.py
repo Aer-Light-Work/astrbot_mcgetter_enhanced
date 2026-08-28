@@ -85,9 +85,13 @@ class MyPlugin(Star):
         logger.info("MyPlugin 初始化完成")
         # 应用自定义字体配置（未配置则使用系统默认加载逻辑）
         font_path = (config or {}).get("font_path", "") if config else ""
-        set_custom_font_path(font_path)
+        bold_font_path = (config or {}).get("bold_font_path", "") if config else ""
+        heavier_font_weight = (config or {}).get("heavier_font_weight", False) if config else False
+        set_custom_font_path(font_path, bold_font_path, heavier_font_weight)
         if font_path:
             logger.info(f"已设置自定义字体: {font_path}")
+        if heavier_font_weight:
+            logger.info("已启用整体加重字体：常规使用 SemiBold，粗体使用 Bold")
         # 启动每小时柱状图数据采样后台任务（单例，默认对所有已配置服务器启用）
         self._trend_task: Optional[asyncio.Task] = None
         if getattr(self, "_trend_task", None) is None:

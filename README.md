@@ -235,6 +235,55 @@ AstrBot Minecraft服务器信息查询插件，原astrbot_mcgetter_enhanced, 可
 - **清理时机**: 每次 `/mc` 命令执行时
 - **清理提示**: 显示被删除服务器的详细信息
 
+### 字体与 Unicode 回退配置
+
+可在 AstrBot 插件配置中设置以下字体选项：
+
+```json
+{
+  "font_path": "/path/to/YourFont-Regular.ttf",
+  "bold_font_path": "/path/to/YourFont-Bold.ttf",
+  "heavier_font_weight": false
+}
+```
+
+| 配置项 | 说明 |
+|------|------|
+| `font_path` | 常规字体文件路径，支持 `.ttf` / `.ttc`。留空时使用内置或系统默认加载逻辑。 |
+| `bold_font_path` | 粗体字体文件路径。`§l`、Rich 标题、服务器名、人数、版本、延迟与时间等需要粗体的内容会优先使用它。留空时自动从 `font_path` 同目录查找字重变体。 |
+| `heavier_font_weight` | 默认 `false`，仅在配置 `font_path` 后生效。开启时，常规文本优先使用同字体族的 `SemiBold`，`§l` 和界面粗体优先使用 `Bold`。 |
+
+字体字重选择顺序：
+
+```text
+默认模式：Regular → Bold
+整体加重模式：SemiBold → Bold
+```
+
+- 显式指定的 `bold_font_path` 优先级最高。
+- 自动查找会跳过 `Italic` 变体，避免把斜体误作常规或粗体字体。
+- 没有可用的真实粗体文件时，会将常规字形向右复制 1px 作为 fallback；不会使用四周扩张的描边，因此可避免明显的边缘光晕。测量、对齐与换行会使用同一实际字重的宽度。
+
+项目在 `resource/unifont_all-17.0.05.hex` 中提供 UniFont 位图回退：当主字体不包含某个 Unicode 字符时，渲染器会按字符切换到 UniFont，以降低缺字方块出现的概率。该回退适用于普通 Unicode 字符；Minecraft Mod 或资源包定义的私有区图标仍需要对应资源包字体，项目不会尝试还原。
+
+### 字体渲染测试
+
+```bash
+# Mock 图片、粗体、UniFont 与布局测试
+python tests/test_presets.py
+
+# 真实服务器 MOTD 测试（当前测试地址：127.0.0.1:43596）
+python tests/test_server_ping.py
+```
+
+真实服务器测试会以同一份实时 MOTD 分别输出默认字体、非默认字体和整体加重字体的 Rich 图片，便于人工比较：
+
+```text
+tests/test_output_ping_127.0.0.1:43596.png
+tests/test_output_ping_127.0.0.1:43596_custom_font.png
+tests/test_output_ping_127.0.0.1:43596_heavier_font_weight.png
+```
+
 ## Presets 图片样式系统
 
 ### 简介

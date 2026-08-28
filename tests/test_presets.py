@@ -22,6 +22,7 @@ setup_mock_astrbot()
 from script.get_server_info import (
     parse_section_sign_text,
     parse_with_mcstatus,
+    manual_parse_motd,
     parse_custom_note_text,
     parse_mc_color,
     TextSegment,
@@ -30,7 +31,7 @@ from script.get_server_info import (
 from script.preset_manager import get_preset_manager, PresetManager
 from script.get_img import (
     generate_server_info_image, load_font, wrap_segments_to_lines,
-    set_custom_font_path,
+    set_custom_font_path, load_render_font, measure_text, draw_segments, _unifont,
 )
 from PIL import Image, ImageDraw
 
@@ -362,6 +363,108 @@ async def test_custom_font():
         set_custom_font_path(None)
 
 
+async def test_bold_and_unifont_fallback():
+    """验证真实粗体选择与 UniFont 缺字回退，不使用固定像素截图断言。"""
+    print("=" * 60)
+    print("测试: 粗体字体与 UniFont 回退")
+    print("=" * 60)
+
+    custom_font = Path(__file__).resolve().parent / "SarasaUiSC-Regular.ttf"
+    custom_bold_font = Path(__file__).resolve().parent / "SarasaUiSC-Bold.ttf"
+    assert _unifont.glyph("☃") is not None, "UniFont 应包含测试符号 U+2603"
+
+    set_custom_font_path(str(custom_font), str(custom_bold_font))
+    try:
+        font = await load_render_font(24)
+        assert font.bold is not None, "配置的粗体字体应被加载"
+        assert Path(font.bold.path).resolve() == custom_bold_font.resolve(), "粗体段必须使用配置的粗体文件"
+
+        # 用主字体没有的非 BMP 字符验证回退选择；UniFont 包含该字符即可验证逻辑。
+        fallback_char = next(chr(cp) for cp in (0x1F0A1, 0x1F4A9, 0x1F300) if _unifont.glyph(chr(cp)))
+        assert font.source_for(fallback_char) == "unifont", "主字体缺字时应切换到 UniFont"
+
+        img = Image.new("RGB", (600, 100), "black")
+        draw = ImageDraw.Draw(img)
+        segments = [TextSegment("普通"), TextSegment("粗体", bold=True), TextSegment(f" {fallback_char} ☃")]
+        expected_width = sum(measure_text(draw, seg.text, font, seg.bold) for seg in segments)
+        end_x = draw_segments(draw, 20, 30, segments, font, (255, 255, 255))
+        assert end_x - 20 == expected_width, "绘制推进宽度必须与测量宽度一致"
+
+        wrapped = wrap_segments_to_lines(draw, [TextSegment(fallback_char * 12)], font, 80)
+        assert len(wrapped) > 1, "UniFont 回退字符应参与自动换行"
+        assert all(sum(measure_text(draw, seg.text, font, seg.bold) for seg in line) <= 80 for line in wrapped), "换行结果不可超过最大宽度"
+
+        output_path = Path(__file__).resolve().parent / "test_output_bold_unifont.png"
+        img.save(output_path)
+        print(f"✓ 粗体与 UniFont 测试渲染图已保存到: {output_path}\n")
+    finally:
+        set_custom_font_path(None)
+
+
+async def test_non_default_font_without_bold_fallback():
+    """验证非默认字体在没有粗体文件时使用无光晕的整数像素粗体 fallback。"""
+    print("=" * 60)
+    print("测试: 非默认字体的粗体 fallback")
+    print("=" * 60)
+
+    custom_font = Path(__file__).resolve().parent / "SarasaUiSC-Regular.ttf"
+    # 显式指定不存在的粗体路径，避免测试目录中的 SarasaUiSC-Bold.ttf 被自动猜中。
+    set_custom_font_path(str(custom_font), str(custom_font.parent / "missing-bold-font.ttf"))
+    try:
+        font = await load_render_font(24)
+        assert font.bold is None, "未提供粗体文件时应进入 fallback 路径"
+        image = Image.new("RGB", (700, 120), "#101010")
+        draw = ImageDraw.Draw(image)
+        segments = [
+            TextSegment("自定义字体："),
+            TextSegment("§l粗体 Bold 中文", bold=True),
+            TextSegment(" ☃ ", color=(85, 255, 255)),
+        ]
+        expected_width = sum(measure_text(draw, seg.text, font, seg.bold) for seg in segments)
+        end_x = draw_segments(draw, 20, 30, segments, font, (255, 255, 255))
+        assert end_x - 20 == expected_width, "fallback 粗体的实际推进宽度必须与测量一致"
+        assert end_x <= image.width, "非默认字体案例不应绘制到画布外"
+
+        output_path = Path(__file__).resolve().parent / "test_output_non_default_font_bold_fallback.png"
+        image.save(output_path)
+        print(f"✓ 非默认字体粗体 fallback 测试渲染图已保存到: {output_path}\n")
+    finally:
+        set_custom_font_path(None)
+
+
+async def test_heavier_font_weight_mode():
+    """验证整体加重模式以 SemiBold 渲染常规文本、以 Bold 渲染 §l 文本。"""
+    print("=" * 60)
+    print("测试: 整体加重字体模式")
+    print("=" * 60)
+
+    tests_dir = Path(__file__).resolve().parent
+    regular_font = tests_dir / "SarasaUiSC-Regular.ttf"
+    semibold_font = tests_dir / "SarasaUiSC-SemiBold.ttf"
+    bold_font = tests_dir / "SarasaUiSC-Bold.ttf"
+    assert all(path.exists() for path in (regular_font, semibold_font, bold_font)), "Sarasa 字重测试字体不完整"
+
+    set_custom_font_path(str(regular_font), heavier_font_weight=True)
+    try:
+        font = await load_render_font(24)
+        assert Path(font.regular.path).resolve() == semibold_font.resolve(), "整体加重模式的常规文本必须使用 SemiBold"
+        assert font.bold is not None, "整体加重模式必须加载 Bold"
+        assert Path(font.bold.path).resolve() == bold_font.resolve(), "整体加重模式的 §l 文本必须使用 Bold"
+
+        image = Image.new("RGB", (700, 120), "#101010")
+        draw = ImageDraw.Draw(image)
+        segments = [TextSegment("常规 SemiBold 文字  "), TextSegment("§l粗体 Bold 文字", bold=True)]
+        expected_width = sum(measure_text(draw, seg.text, font, seg.bold) for seg in segments)
+        end_x = draw_segments(draw, 20, 30, segments, font, (255, 255, 255))
+        assert end_x - 20 == expected_width, "整体加重模式的绘制和测量宽度必须一致"
+
+        output_path = tests_dir / "test_output_heavier_font_weight.png"
+        image.save(output_path)
+        print(f"✓ 整体加重字体测试渲染图已保存到: {output_path}\n")
+    finally:
+        set_custom_font_path(None)
+
+
 async def test_generate_simple_image():
     """测试生成 simple 样式图片（mock，不依赖网络）"""
     print("=" * 60)
@@ -508,6 +611,9 @@ async def main():
     await test_generate_rich_image()
     await test_generate_rich_image_with_long_motd()
     await test_custom_font()
+    await test_bold_and_unifont_fallback()
+    await test_non_default_font_without_bold_fallback()
+    await test_heavier_font_weight_mode()
     await test_generate_simple_image()
     await test_generate_with_note()
     await test_generate_with_color_tag_note()

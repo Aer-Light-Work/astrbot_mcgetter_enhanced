@@ -3,7 +3,7 @@ import asyncio
 import io
 from pathlib import Path
 import base64
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Dict, Iterable
 from astrbot.api import logger
 
 from .get_server_info import (
@@ -14,46 +14,157 @@ from .preset_manager import get_preset_manager
 # 自定义字体文件路径（可通过 set_custom_font_path 设置，默认为空使用系统加载逻辑）
 _custom_font_path: Optional[str] = None
 _custom_bold_font_path: Optional[str] = None
+_heavier_font_weight: bool = False
 
 
-def set_custom_font_path(font_path: Optional[str], bold_font_path: Optional[str] = None) -> None:
+class UniFontHex:
+    """GNU UniFont .hex 的按需位图字形读取器。"""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self._offsets: Dict[int, int] = {}
+        self._glyphs: Dict[int, Tuple[int, int, bytes]] = {}
+        self._indexed = False
+
+    def _ensure_index(self) -> None:
+        if self._indexed:
+            return
+        try:
+            with self.path.open("rb") as source:
+                while True:
+                    offset = source.tell()
+                    line = source.readline()
+                    if not line:
+                        break
+                    codepoint, separator, _ = line.partition(b":")
+                    if separator:
+                        try:
+                            self._offsets[int(codepoint, 16)] = offset
+                        except ValueError:
+                            pass
+        except OSError as error:
+            logger.warning(f"UniFont 索引加载失败: {self.path}: {error}")
+        self._indexed = True
+
+    def glyph(self, char: str) -> Optional[Tuple[int, int, bytes]]:
+        codepoint = ord(char)
+        self._ensure_index()
+        if codepoint not in self._offsets:
+            return None
+        if codepoint not in self._glyphs:
+            try:
+                with self.path.open("rb") as source:
+                    source.seek(self._offsets[codepoint])
+                    _, hex_data = source.readline().decode("ascii").strip().split(":", 1)
+                data = bytes.fromhex(hex_data)
+                # UniFont .hex 的每行固定 16 行，高度为 16；每行字节数决定宽度。
+                if len(data) % 16:
+                    return None
+                self._glyphs[codepoint] = (len(data) // 16 * 8, 16, data)
+            except (OSError, UnicodeDecodeError, ValueError):
+                return None
+        return self._glyphs[codepoint]
+
+
+_unifont = UniFontHex(Path(__file__).resolve().parent.parent / "resource" / "unifont_all-17.0.05.hex")
+
+
+class RenderFont:
+    """一个字号下的主 TrueType 字体、粗体字体与 UniFont 回退集合。"""
+
+    def __init__(self, regular: ImageFont.ImageFont, bold: Optional[ImageFont.ImageFont], size: int):
+        self.regular = regular
+        self.bold = bold
+        self.size = size
+
+    @staticmethod
+    def _has_glyph(font: ImageFont.ImageFont, char: str) -> bool:
+        if char.isspace():
+            return True
+        try:
+            # Pillow 对未覆盖字符会给出与 U+FFFF 相同的 .notdef mask。
+            mask = font.getmask(char)
+            missing_mask = font.getmask("\uffff")
+            return (mask.size, bytes(mask)) != (missing_mask.size, bytes(missing_mask))
+        except Exception:
+            return False
+
+    def source_for(self, char: str, bold: bool = False) -> str:
+        font = self.bold if bold and self.bold is not None else self.regular
+        if self._has_glyph(font, char):
+            return "ttf-bold" if bold and self.bold is not None else "ttf"
+        return "unifont" if _unifont.glyph(char) else "ttf"
+
+    def advance(self, char: str, bold: bool = False) -> int:
+        source = self.source_for(char, bold)
+        if source == "unifont":
+            glyph = _unifont.glyph(char)
+            return max(1, round(glyph[0] * self.size / 16)) if glyph else 0
+        font = self.bold if source == "ttf-bold" else self.regular
+        width = int(round(font.getlength(char)))
+        # 没有真实粗体文件时，draw_segments 会在右侧复制一个整数像素。
+        if bold and self.bold is None:
+            width += 1
+        return width
+
+    def ascent(self) -> int:
+        try:
+            return self.regular.getmetrics()[0]
+        except Exception:
+            return self.size
+
+
+def set_custom_font_path(
+    font_path: Optional[str], bold_font_path: Optional[str] = None, heavier_font_weight: bool = False,
+) -> None:
     """
     设置自定义字体路径，None/空字符串 则恢复系统默认加载逻辑
     bold_font_path: 粗体字体文件路径（可选）。未指定时自动在同目录下查找 SemiBold/Bold 变体
+    heavier_font_weight: 开启时以 SemiBold 作为常规字体、Bold 作为粗体字体
     """
-    global _custom_font_path, _custom_bold_font_path
+    global _custom_font_path, _custom_bold_font_path, _heavier_font_weight
+    _heavier_font_weight = heavier_font_weight
     if font_path:
-        _custom_font_path = str(font_path)
+        original_path = str(font_path)
+        _custom_font_path = (
+            _find_font_variant(original_path, ("SemiBold",)) if heavier_font_weight else None
+        ) or original_path
         if bold_font_path:
             _custom_bold_font_path = str(bold_font_path)
+        elif heavier_font_weight:
+            _custom_bold_font_path = _find_font_variant(original_path, ("Bold",))
         else:
-            _custom_bold_font_path = _guess_bold_font_path(str(font_path))
+            _custom_bold_font_path = _guess_bold_font_path(original_path)
     else:
         _custom_font_path = None
         _custom_bold_font_path = None
+        _heavier_font_weight = False
 
 
-def _guess_bold_font_path(regular_path: str) -> Optional[str]:
-    """从常规字体路径猜测同目录下的粗体变体（SemiBold / Bold）"""
+def _find_font_variant(regular_path: str, variants: Tuple[str, ...]) -> Optional[str]:
+    """从同一字体族中查找指定字重的非斜体字体文件。"""
     try:
         base = Path(regular_path)
         directory = base.parent
         if not directory.exists():
             return None
-        # 取常规字体名前缀（去掉 Regular 等后缀）
         prefix = base.stem.replace("-Regular", "").replace("Regular", "").strip("-")
-        for pattern in (
-            f"*{prefix}*SemiBold*",
-            f"*{prefix}*Bold*",
-            f"*SemiBold*",
-            f"*Bold*",
-        ):
-            matches = sorted(directory.glob(pattern))
-            if matches:
-                return str(matches[0])
+        candidates = []
+        for variant in variants:
+            candidates.extend(directory.glob(f"*{prefix}*{variant}*"))
+        for candidate in sorted(set(candidates)):
+            if candidate.suffix.lower() not in {".ttf", ".ttc", ".otf"}:
+                continue
+            if "italic" not in candidate.stem.lower():
+                return str(candidate)
     except Exception:
         pass
     return None
+
+
+def _guess_bold_font_path(regular_path: str) -> Optional[str]:
+    """从常规字体路径猜测同目录下的粗体变体（SemiBold / Bold）"""
+    return _find_font_variant(regular_path, ("SemiBold", "Bold"))
 
 
 async def load_font(font_size, bold: bool = False):
@@ -94,6 +205,16 @@ async def load_font(font_size, bold: bool = False):
         return ImageFont.load_default()
 
 
+async def load_render_font(font_size: int) -> RenderFont:
+    """加载一组用于实际绘制、测量与 UniFont 回退的字体。"""
+    regular = await load_font(font_size)
+    bold = await load_font(font_size, bold=True)
+    # load_font 在没有粗体变体时会回退常规字体；此时描边模拟比伪装为真粗体更准确。
+    if bold is regular or getattr(bold, "path", None) == getattr(regular, "path", None):
+        bold = None
+    return RenderFont(regular, bold, font_size)
+
+
 async def fetch_icon(icon_base64: Optional[str] = None) -> Optional[Image.Image]:
     """处理Base64编码的服务器图标，无图标时返回默认图标占位"""
     if not icon_base64:
@@ -120,25 +241,63 @@ def load_default_icon() -> Optional[Image.Image]:
         return None
 
 
-def measure_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -> int:
-    """测量文本宽度"""
-    try:
-        return int(draw.textlength(text, font=font))
-    except Exception:
-        bbox = draw.textbbox((0, 0), text, font=font)
-        return bbox[2] - bbox[0]
+def _as_render_font(font: ImageFont.ImageFont | RenderFont) -> RenderFont:
+    return font if isinstance(font, RenderFont) else RenderFont(font, None, getattr(font, "size", 16))
 
 
-def _seg_width(draw: ImageDraw.ImageDraw, seg: TextSegment, font: ImageFont.ImageFont) -> int:
-    """单个文本段宽度（粗体额外+2像素模拟）"""
-    return measure_text(draw, seg.text, font) + (2 if seg.bold else 0)
+def measure_text(
+    draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont | RenderFont, bold: bool = False,
+) -> int:
+    """以最终实际使用的字体（含 UniFont 回退）测量文本宽度。"""
+    render_font = _as_render_font(font)
+    return sum(render_font.advance(char, bold) for char in text)
+
+
+def _seg_width(draw: ImageDraw.ImageDraw, seg: TextSegment, font: ImageFont.ImageFont | RenderFont) -> int:
+    """按最终粗体/回退字体测量单个文本段。"""
+    return measure_text(draw, seg.text, font, seg.bold)
+
+
+def _font_runs(text: str, font: RenderFont, bold: bool) -> Iterable[Tuple[str, str]]:
+    """按实际字体来源合并连续字符，避免逐字符调用 Pillow。"""
+    current_source: Optional[str] = None
+    current_text = ""
+    for char in text:
+        source = font.source_for(char, bold)
+        if current_source is not None and source != current_source:
+            yield current_source, current_text
+            current_text = ""
+        current_source = source
+        current_text += char
+    if current_source is not None:
+        yield current_source, current_text
+
+
+def _draw_unifont_char(
+    image: Image.Image, x: int, y: int, char: str, font: RenderFont, color: Tuple[int, int, int], bold: bool,
+) -> int:
+    glyph = _unifont.glyph(char)
+    if glyph is None:
+        return 0
+    width, height, data = glyph
+    bitmap = Image.frombytes("1", (width, height), data)
+    scaled_width = max(1, round(width * font.size / 16))
+    scaled_height = max(1, round(height * font.size / 16))
+    bitmap = bitmap.resize((scaled_width, scaled_height), Image.Resampling.NEAREST)
+    # UniFont 的 16px 字高以基线为参考，与当前 TrueType 字体基线对齐。
+    glyph_y = y + font.ascent() - scaled_height
+    colored = Image.new("RGB", bitmap.size, color)
+    image.paste(colored, (x, glyph_y), bitmap.convert("L"))
+    if bold:
+        image.paste(colored, (x + 1, glyph_y), bitmap.convert("L"))
+    return scaled_width
 
 
 def draw_segments(
     draw: ImageDraw.ImageDraw,
     x: int, y: int,
     segments: List[TextSegment],
-    font: ImageFont.ImageFont,
+    font: ImageFont.ImageFont | RenderFont,
     default_color: Tuple[int, int, int],
     bold_font: Optional[ImageFont.ImageFont] = None,
 ) -> int:
@@ -146,44 +305,50 @@ def draw_segments(
     绘制带格式的文本段，返回绘制后的 x 坐标
     粗体优先使用粗体字体文件（bold_font），否则回退描边模拟；下划线/删除线用线条绘制
     """
+    render_font = _as_render_font(font)
+    if bold_font is not None:
+        render_font.bold = bold_font
+    image = draw._image
     current_x = x
     for seg in segments:
         if not seg.text:
             continue
 
         color = seg.color if seg.color else default_color
+        segment_x = current_x
 
-        if seg.bold and bold_font is not None:
-            # 使用真正的粗体字体文件渲染
-            draw.text((current_x, y), seg.text, font=bold_font, fill=color)
-        elif seg.bold:
-            # 回退：描边模拟粗体（无粗体字体文件时）
-            draw.text(
-                (current_x, y), seg.text, font=font, fill=color,
-                stroke_width=1, stroke_fill=color,
-            )
-        else:
-            draw.text((current_x, y), seg.text, font=font, fill=color)
+        for source, run in _font_runs(seg.text, render_font, seg.bold):
+            if source == "unifont":
+                for char in run:
+                    current_x += _draw_unifont_char(image, current_x, y, char, render_font, color, seg.bold)
+                continue
+            active_font = render_font.bold if source == "ttf-bold" else render_font.regular
+            if seg.bold and source == "ttf" and render_font.bold is None:
+                # 不使用 stroke_width：描边会在字形四周制造抗锯齿光晕。
+                # 仅向右复制一个整数像素，模拟增加字重并保持边缘收敛。
+                draw.text((current_x, y), run, font=active_font, fill=color)
+                draw.text((current_x + 1, y), run, font=active_font, fill=color)
+            else:
+                draw.text((current_x, y), run, font=active_font, fill=color)
+            current_x += measure_text(draw, run, render_font, seg.bold)
 
-        text_width = measure_text(draw, seg.text, font)
+        text_width = _seg_width(draw, seg, render_font)
 
         # 下划线
         if seg.underline:
-            baseline_y = y + font.size - 2
+            baseline_y = y + render_font.size - 2
             draw.line(
-                [(current_x, baseline_y), (current_x + text_width, baseline_y)],
+                [(segment_x, baseline_y), (segment_x + text_width, baseline_y)],
                 fill=color, width=1
             )
 
         # 删除线
         if seg.strikethrough:
-            mid_y = y + font.size // 2
+            mid_y = y + render_font.size // 2
             draw.line(
-                [(current_x, mid_y), (current_x + text_width, mid_y)],
+                [(segment_x, mid_y), (segment_x + text_width, mid_y)],
                 fill=color, width=1
             )
-
-        current_x += text_width + (2 if seg.bold else 0)
 
     return current_x
 
@@ -192,7 +357,7 @@ def draw_segments_centered(
     draw: ImageDraw.ImageDraw,
     center_x: int, y: int,
     segments: List[TextSegment],
-    font: ImageFont.ImageFont,
+    font: ImageFont.ImageFont | RenderFont,
     default_color: Tuple[int, int, int],
     bold_font: Optional[ImageFont.ImageFont] = None,
 ) -> int:
@@ -206,7 +371,7 @@ def draw_segments_right_aligned(
     draw: ImageDraw.ImageDraw,
     right_x: int, y: int,
     segments: List[TextSegment],
-    font: ImageFont.ImageFont,
+    font: ImageFont.ImageFont | RenderFont,
     default_color: Tuple[int, int, int],
     bold_font: Optional[ImageFont.ImageFont] = None,
 ) -> int:
@@ -219,7 +384,7 @@ def draw_segments_right_aligned(
 def wrap_segments_to_lines(
     draw: ImageDraw.ImageDraw,
     segments: List[TextSegment],
-    font: ImageFont.ImageFont,
+    font: ImageFont.ImageFont | RenderFont,
     max_width: int,
 ) -> List[List[TextSegment]]:
     """将文本段按最大宽度折行"""
@@ -245,7 +410,7 @@ def wrap_segments_to_lines(
                     chunk = ""
                     chunk_w = 0
                     for ch in remaining:
-                        ch_w = measure_text(draw, ch, font)
+                        ch_w = measure_text(draw, ch, font, seg.bold)
                         if chunk_w + ch_w <= max_width:
                             chunk += ch
                             chunk_w += ch_w
@@ -371,9 +536,9 @@ async def _generate_simple_image(
     LATENCY_WARN = tuple(colors.get("latency_warn", [255, 170, 0]))
     LATENCY_BAD = tuple(colors.get("latency_bad", [255, 85, 85]))
 
-    title_font = await load_font(fonts_cfg.get("title_size", 30))
-    text_font = await load_font(fonts_cfg.get("text_size", 20))
-    small_font = await load_font(fonts_cfg.get("small_size", 18))
+    title_font = await load_render_font(fonts_cfg.get("title_size", 30))
+    text_font = await load_render_font(fonts_cfg.get("text_size", 20))
+    small_font = await load_render_font(fonts_cfg.get("small_size", 18))
 
     server_icon = await fetch_icon(icon_base64) if display.get("show_icon", True) else None
 
@@ -462,25 +627,25 @@ async def _generate_simple_image(
         server_icon_resized = server_icon.resize((icon_size, icon_size))
         img.paste(server_icon_resized, (padding, base_y), icon_mask)
 
-    draw.text((text_x, base_y), server_name, font=title_font, fill=ACCENT_COLOR)
+    draw_segments(draw, text_x, base_y, [TextSegment(text=server_name, bold=True)], title_font, ACCENT_COLOR)
     base_y += 40
 
     for i, line in enumerate(version_addr_lines):
-        draw.text((text_x, base_y), line, font=text_font, fill=TEXT_COLOR)
+        draw_segments(draw, text_x, base_y, [TextSegment(text=line)], text_font, TEXT_COLOR)
         base_y += 40
 
-    draw.text((text_x, base_y), online_title, font=text_font, fill=ACCENT_COLOR)
-    lat_w = measure_text(draw, latency_text, text_font)
+    draw_segments(draw, text_x, base_y, [TextSegment(text=online_title, bold=True)], text_font, ACCENT_COLOR)
+    lat_w = measure_text(draw, latency_text, text_font, bold=True)
     latency_color = LATENCY_GOOD if latency < 100 else LATENCY_WARN if latency < 200 else LATENCY_BAD
-    draw.text((img_width - padding - lat_w, base_y), latency_text, font=text_font, fill=latency_color)
+    draw_segments(draw, img_width - padding - lat_w, base_y, [TextSegment(text=latency_text, bold=True)], text_font, latency_color)
     base_y += 40
 
     if players_lines:
         for line in players_lines:
-            draw.text((text_x + 20, base_y), line, font=small_font, fill=TEXT_COLOR)
+            draw_segments(draw, text_x + 20, base_y, [TextSegment(text=line)], small_font, TEXT_COLOR)
             base_y += line_height
     else:
-        draw.text((text_x + 20, base_y), "暂无玩家在线", font=small_font, fill=TEXT_COLOR)
+        draw_segments(draw, text_x + 20, base_y, [TextSegment(text="暂无玩家在线")], small_font, TEXT_COLOR)
         base_y += line_height
 
     draw.rounded_rectangle(
@@ -551,15 +716,14 @@ async def _generate_rich_image(
     icon_size = layout_cfg.get("icon_size", 100)
     line_spacing = layout_cfg.get("line_spacing", 8)
 
-    group_title_font = await load_font(group_title_size)
-    title_font = await load_font(title_size)
-    text_font = await load_font(text_size)
-    small_font = await load_font(small_size)
-    # 粗体字体（优先使用粗体字体文件，未配置时回退描边模拟）
-    group_title_bold_font = await load_font(group_title_size, bold=True)
-    title_bold_font = await load_font(title_size, bold=True)
-    text_bold_font = await load_font(text_size, bold=True)
-    small_bold_font = await load_font(small_size, bold=True)
+    group_title_font = await load_render_font(group_title_size)
+    title_font = await load_render_font(title_size)
+    text_font = await load_render_font(text_size)
+    small_font = await load_render_font(small_size)
+    group_title_bold_font = None
+    title_bold_font = None
+    text_bold_font = None
+    small_bold_font = None
 
     # 服务器图标（无图标时用默认图标占位）
     server_icon = load_default_icon() if not display.get("show_icon", True) is False else None
@@ -583,9 +747,9 @@ async def _generate_rich_image(
     tmp_measure_img = Image.new("RGB", (img_width, 10), color=BG_COLOR)
     tmp_measure_draw = ImageDraw.Draw(tmp_measure_img)
     right_col_width = max(
-        measure_text(tmp_measure_draw, f"{plays_online}/{plays_max}", text_font),
-        measure_text(tmp_measure_draw, server_version, text_font),
-        measure_text(tmp_measure_draw, f"{latency}ms", text_font),
+        measure_text(tmp_measure_draw, f"{plays_online}/{plays_max}", text_font, bold=True),
+        measure_text(tmp_measure_draw, server_version, text_font, bold=True),
+        measure_text(tmp_measure_draw, f"{latency}ms", text_font, bold=True),
     )
     # 左栏 MOTD 最大可用宽度：不超过右栏左边界，并预留 20px 间隔，
     # 避免 MOTD 过长时波及右侧版本号和延迟

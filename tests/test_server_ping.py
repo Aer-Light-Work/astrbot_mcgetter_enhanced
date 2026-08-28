@@ -8,7 +8,9 @@
 import asyncio
 import sys
 import base64
+import io
 from pathlib import Path
+from PIL import Image
 
 # 添加项目根目录到路径
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -19,7 +21,7 @@ from mock_astrbot import setup_mock_astrbot
 setup_mock_astrbot()
 
 from script.get_server_info import get_server_status
-from script.get_img import generate_server_info_image
+from script.get_img import generate_server_info_image, load_render_font, set_custom_font_path
 
 # 用于真实 ping 测试的服务器列表（后续按需追加）
 # 注意：默认地址已去敏感化，实际使用时请替换为真实服务器地址
@@ -86,6 +88,104 @@ async def test_ping_server(host: str) -> None:
     print("✓ 真实服务器 ping 测试通过\n")
 
 
+async def test_ping_server_with_custom_font(host: str) -> None:
+    """使用同一份真实服务器 MOTD，以非默认字体重新渲染。"""
+    print("=" * 60)
+    print(f"测试: 真实服务器 MOTD 的非默认字体渲染 - {host}")
+    print("=" * 60)
+
+    result = await get_server_status(host)
+    assert result is not None, f"无法获取服务器 {host} 的状态信息"
+
+    tests_dir = Path(__file__).resolve().parent
+    regular_font = tests_dir / "SarasaUiSC-Regular.ttf"
+    bold_font = tests_dir / "SarasaUiSC-Bold.ttf"
+    assert regular_font.exists(), f"非默认常规字体不存在: {regular_font}"
+    assert bold_font.exists(), f"非默认粗体字体不存在: {bold_font}"
+
+    set_custom_font_path(str(regular_font), str(bold_font))
+    try:
+        render_font = await load_render_font(26)
+        assert render_font.bold is not None, "非默认粗体字体加载失败"
+        assert Path(render_font.regular.path).resolve() == regular_font.resolve()
+        assert Path(render_font.bold.path).resolve() == bold_font.resolve()
+
+        img_b64 = await generate_server_info_image(
+            players_list=result["players_list"],
+            latency=result["latency"],
+            server_name=host,
+            plays_max=result["plays_max"],
+            plays_online=result["plays_online"],
+            server_version=result["server_version"],
+            icon_base64=result["icon_base64"],
+            host_address=result["host"],
+            preset_name="rich",
+            motd_lines=result["motd_lines"],
+        )
+        assert img_b64, "非默认字体图片生成失败"
+        img_data = base64.b64decode(img_b64)
+
+        output_path = tests_dir / f"test_output_ping_{host}_custom_font.png"
+        output_path.write_bytes(img_data)
+        with Image.open(io.BytesIO(img_data)) as image:
+            image.verify()
+            print(f"  非默认字体图片尺寸: {image.size[0]}x{image.size[1]}")
+        print(f"  非默认字体图片已保存: {output_path}")
+    finally:
+        set_custom_font_path(None)
+
+    print("✓ 真实服务器非默认字体 MOTD 测试通过\n")
+
+
+async def test_ping_server_with_heavier_font_weight(host: str) -> None:
+    """使用真实服务器 MOTD 验证 SemiBold 常规字体与 Bold 粗体字体的整体加重模式。"""
+    print("=" * 60)
+    print(f"测试: 真实服务器 MOTD 的整体加重字体渲染 - {host}")
+    print("=" * 60)
+
+    result = await get_server_status(host)
+    assert result is not None, f"无法获取服务器 {host} 的状态信息"
+
+    tests_dir = Path(__file__).resolve().parent
+    regular_font = tests_dir / "SarasaUiSC-Regular.ttf"
+    semibold_font = tests_dir / "SarasaUiSC-SemiBold.ttf"
+    bold_font = tests_dir / "SarasaUiSC-Bold.ttf"
+    assert all(path.exists() for path in (regular_font, semibold_font, bold_font)), "整体加重字体测试资源不完整"
+
+    set_custom_font_path(str(regular_font), heavier_font_weight=True)
+    try:
+        render_font = await load_render_font(26)
+        assert Path(render_font.regular.path).resolve() == semibold_font.resolve(), "真实服务器整体加重模式的常规字体必须为 SemiBold"
+        assert render_font.bold is not None, "真实服务器整体加重模式的粗体字体加载失败"
+        assert Path(render_font.bold.path).resolve() == bold_font.resolve(), "真实服务器整体加重模式的粗体字体必须为 Bold"
+
+        img_b64 = await generate_server_info_image(
+            players_list=result["players_list"],
+            latency=result["latency"],
+            server_name=host,
+            plays_max=result["plays_max"],
+            plays_online=result["plays_online"],
+            server_version=result["server_version"],
+            icon_base64=result["icon_base64"],
+            host_address=result["host"],
+            preset_name="rich",
+            motd_lines=result["motd_lines"],
+        )
+        assert img_b64, "整体加重字体图片生成失败"
+        img_data = base64.b64decode(img_b64)
+
+        output_path = tests_dir / f"test_output_ping_{host}_heavier_font_weight.png"
+        output_path.write_bytes(img_data)
+        with Image.open(io.BytesIO(img_data)) as image:
+            image.verify()
+            print(f"  整体加重字体图片尺寸: {image.size[0]}x{image.size[1]}")
+        print(f"  整体加重字体图片已保存: {output_path}")
+    finally:
+        set_custom_font_path(None)
+
+    print("✓ 真实服务器整体加重字体 MOTD 测试通过\n")
+
+
 async def main():
     print("\n" + "=" * 60)
     print("  MC Server Status Plugin - 真实服务器 ping 测试")
@@ -94,6 +194,8 @@ async def main():
     print(f"测试服务器列表: {PING_TEST_SERVERS}\n")
     for host in PING_TEST_SERVERS:
         await test_ping_server(host)
+        await test_ping_server_with_custom_font(host)
+        await test_ping_server_with_heavier_font_weight(host)
 
     print("=" * 60)
     print("  所有真实服务器 ping 测试通过！✓")

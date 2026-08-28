@@ -4,5 +4,17 @@
     "type": "string",
     "default": "",
     "hint": "指定 .ttf / .ttc 字体文件路径。留空则使用系统默认加载逻辑（内置 msyh.ttf / 系统字体 / PIL 默认字体）。"
+  },
+  "bold_font_path": {
+    "description": "自定义粗体字体文件路径",
+    "type": "string",
+    "default": "",
+    "hint": "指定主字体对应的粗体 .ttf / .ttc 文件。留空时自动在主字体同目录查找 SemiBold/Bold 变体；找不到时使用右向 1px 复制的无光晕粗体 fallback。"
+  },
+  "heavier_font_weight": {
+    "description": "整体使用更重字重",
+    "type": "boolean",
+    "default": false,
+    "hint": "仅对配置了自定义字体的情况生效。开启后自动使用同字体族的 SemiBold 渲染常规文本，并使用 Bold 渲染 §l 与界面粗体；找不到对应字体时回退。"
   }
 }

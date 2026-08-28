@@ -13,7 +13,7 @@
   },
   "heavier_font_weight": {
     "description": "整体使用更重字重",
-    "type": "boolean",
+    "type": "bool",
     "default": false,
     "hint": "仅对配置了自定义字体的情况生效。开启后自动使用同字体族的 SemiBold 渲染常规文本，并使用 Bold 渲染 §l 与界面粗体；找不到对应字体时回退。"
   }

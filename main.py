@@ -24,49 +24,58 @@ import asyncio
 import re
 from datetime import datetime, timedelta
 
-# 常量定义
 HELP_INFO = """
-mchelp 
---查看帮助
+MC 服务器管理帮助
 
-/mc   
---查询保存的服务器
+/mchelp
+显示本帮助。
 
-/mcadd 服务器名称 服务器地址 [force]
---添加要查询的服务器
---force: 可选参数，设为True时跳过预查询检查强制添加
+【查询】
+/mc
+查询本群已保存的所有服务器，并生成状态图片。
 
-/mcget 服务器名称/ID
---获取指定服务器的地址信息
-
-/mcdel 服务器名称/ID 
---删除服务器
-
-/mcup 服务器名称/ID [新名称] [新地址]
---更新服务器信息
+/mcget <名称或ID>
+查看服务器地址。
 
 /mclist
---列出所有服务器及其ID
+列出本群所有服务器的 ID、名称和地址。
 
-/mccleanup
---手动触发自动清理（删除10天未查询成功的服务器）
+【服务器管理】
+/mcadd <服务器名称> <服务器地址> [True]
+添加服务器。地址查询失败时，末尾加 True 可跳过预查询强制添加。
+示例：/mcadd 生存服 127.0.0.1:25565
 
-/mcdata [服务器名称/ID] [小时数=24]
---输出当前群全部或指定服务器在最近N小时的在线人数柱状图
+/mcup <名称或ID> [新名称] [新地址]
+更新名称或地址，至少填写一项。
+示例：/mcup 1 新生存服
+
+/mcdel <名称或ID>
+删除服务器。支持使用 ID 或原名称。
+
+/mcalias <名称或ID> [别名]
+设置显示别名；省略别名则清除别名。别名支持空格。
+示例：/mcalias 1 我的生存服务器
+
+/mcnote <名称或ID> [备注]
+设置备注；省略备注则清除备注。备注支持空格、换行、§ 颜色代码和 <color:#hex> 标签。
+示例：/mcnote 1 §a欢迎来到服务器
+
+【显示与样式】
+/mctoggle <players|notes|time|id>
+切换玩家列表、备注、查询时间或服务器序号的显示状态。
+再次执行同一选项即可恢复；可选项：players、notes、time、id。
 
 /mcpreset [名称]
---查看/切换图片样式preset
+不填名称：查看当前和可用 preset；填写 rich 或 simple：切换图片样式。
 
-/mcnote [服务器名称/ID] [备注内容]
---设置/清除服务器自定义备注（支持§颜色代码和<color:#hex>标签）
---不填备注内容则清除备注
+【在线人数趋势】
+/mcdata [名称或ID] [小时数]
+查看在线人数柱状图，小时数范围为 1～168，默认 24 小时。
+不填参数查看全部服务器；只填数字且该数字不是服务器 ID 时，数字会被当作小时数。
+示例：/mcdata、/mcdata 48、/mcdata 1 72
 
-/mcalias [服务器名称/ID] [别名]
---设置服务器显示别名
---不填别名则清除别名
-
-/mctoggle [players|notes|time|id]
---切换显示选项：玩家列表/备注/查询时间/序号显示
+/mccleanup
+手动清理连续 10 天未成功查询的服务器。
 """
 
 @register("astrbot_mcgetter_enhanced", "薄暝", "查询mc服务器信息和玩家列表,在线人数柱状图,渲染为图片(修改自QiChen的mcgetter)", "1.5.0")
@@ -198,7 +207,7 @@ class MyPlugin(Star):
             if not re.match(r'^[a-zA-Z0-9.:-]+$', host):
                 yield event.plain_result("服务器地址格式不正确，只能包含字母、数字和符号.:-")
                 return
-            elif await get_server_status(host) is None and not force:
+            elif not force and await get_server_status(host) is None:
                 yield event.plain_result("预查询失败，请检查服务器是否在线或地址是否正确，或在完整的/mcadd命令后加上True 强制添加")
                 return
                 

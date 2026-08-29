@@ -44,28 +44,37 @@ AstrBot Minecraft服务器信息查询插件，原astrbot_mcgetter_enhanced, 可
 
 | 命令 | 参数 | 说明 |
 |------|------|------|
-| `/mchelp` | 无 | 查看帮助信息 |
-| `/mc` | 无 | 查询所有保存的服务器状态 |
-| `/mcadd` | 服务器名称 服务器地址 [force] | 添加要查询的服务器 |
-| `/mcget` | 服务器名称/ID | 获取指定服务器的地址信息 |
-| `/mcdel` | 服务器名称/ID | 删除指定的服务器 |
-| `/mcup` | 服务器名称/ID [新名称] [新地址] | 更新服务器信息 |
-| `/mclist` | 无 | 列出所有服务器及其ID |
-| `/mccleanup` | 无 | 手动触发自动清理 |
-| `/mcdata` | [服务器名称/ID] [小时数=24] | 输出当前群全部或指定服务器最近N小时柱状图 |
-| `/mcpreset` | 预设 | 切换目前使用的预设 |
+| `/mchelp` | 无 | 查看命令帮助 |
+| `/mc` | 无 | 查询本群所有已保存服务器并生成状态图片 |
+| `/mcadd` | 服务器名称 服务器地址 [True] | 添加服务器；加 `True` 可跳过预查询强制添加 |
+| `/mcget` | 名称或 ID | 查看服务器地址 |
+| `/mcdel` | 名称或 ID | 删除服务器 |
+| `/mcup` | 名称或 ID [新名称] [新地址] | 更新服务器名称或地址，至少填写一项 |
+| `/mclist` | 无 | 列出服务器 ID、名称和地址 |
+| `/mccleanup` | 无 | 手动清理连续 10 天未成功查询的服务器 |
+| `/mcdata` | [名称或 ID] [小时数] | 查看在线人数柱状图，默认最近 24 小时 |
+| `/mcpreset` | [rich 或 simple] | 查看或切换图片样式 |
+| `/mcnote` | 名称或 ID [备注] | 设置/清除服务器备注，备注支持空格和颜色代码 |
+| `/mcalias` | 名称或 ID [别名] | 设置/清除服务器显示别名，别名支持空格 |
+| `/mctoggle` | players / notes / time / id | 切换玩家列表、备注、查询时间或序号显示 |
 
-**\*虽然改版由Agent修改后提供了`/mcalias`, 但因为alias功能尚未经过完全测试，可能会出现不符合预期的行为。**
+除 `/mc`、`/mchelp`、`/mclist`、`/mccleanup` 外，管理命令中的“名称或 ID”均支持两种定位方式。若服务器名称包含空格，建议使用 `mclist` 查看 ID 后使用 ID 操作。
 
 ### 详细说明
 
+#### 查看帮助
+```text
+/mchelp
+```
+显示按“查询、服务器管理、显示与样式、在线人数趋势”分组的命令说明和示例。
+
 #### 添加服务器
 ```
-/mcadd 服务器名称 服务器地址 [force]
+/mcadd 服务器名称 服务器地址 [True]
 ```
 - **服务器名称**: 自定义的服务器名称
 - **服务器地址**: 服务器IP地址或域名（支持端口号）
-- **force**: 可选参数，设为True时跳过预查询检查强制添加
+- **True**: 可选参数，必须作为第三个参数传入；设为 `True` 时跳过预查询检查强制添加
 
 **示例**:
 ```
@@ -89,21 +98,21 @@ AstrBot Minecraft服务器信息查询插件，原astrbot_mcgetter_enhanced, 可
 
 #### 获取服务器地址
 ```
-/mcget 服务器名称/ID
+/mcget 名称或ID
 ```
 获取指定服务器的地址信息。支持通过名称或ID查找。
 
 #### 删除服务器
 ```
-/mcdel 服务器名称/ID
+/mcdel 名称或ID
 ```
 从列表中删除指定的服务器。支持通过名称或ID删除。
 
 #### 更新服务器信息
 ```
-/mcup 服务器名称/ID [新名称] [新地址]
+/mcup 名称或ID [新名称] [新地址]
 ```
-更新指定服务器的名称或地址信息。
+更新指定服务器的名称或地址信息，至少填写新名称或新地址中的一项。名称和地址都不填时不会执行更新。
 
 #### 列出所有服务器
 ```
@@ -111,17 +120,56 @@ AstrBot Minecraft服务器信息查询插件，原astrbot_mcgetter_enhanced, 可
 ```
 显示所有保存的服务器及其ID和地址。
 
-#### 列有服务器玩家柱状图
+#### 在线人数柱状图
 ```
-/mcdata 服务器名称/id 小时数
+/mcdata [名称或ID] [小时数]
 ```
-查看服务器最近N小时柱状图
+查看全部服务器或指定服务器最近 N 小时的在线人数柱状图，小时数会限制在 1～168。
+
+```text
+/mcdata              # 全部服务器，默认 24 小时
+/mcdata 48           # 全部服务器，最近 48 小时
+/mcdata GTNH 48      # GTNH，最近 48 小时
+/mcdata 2 24         # ID 为 2 的服务器，最近 24 小时
+```
+
+当只填写一个纯数字时：如果该数字不是已存在的服务器 ID，则按小时数处理；如果它是服务器 ID，则按服务器 ID 处理。
 
 #### 手动清理
 ```
 /mccleanup
 ```
 手动触发自动清理，删除10天未查询成功的服务器。
+
+#### 切换图片样式
+```text
+/mcpreset             # 查看当前 preset、可用 preset 和默认 preset
+/mcpreset rich        # 切换为 rich 样式
+/mcpreset simple      # 切换为 simple 样式
+```
+
+#### 设置备注
+```text
+/mcnote 名称或ID 备注内容
+/mcnote 名称或ID       # 清除备注
+```
+备注参数会吸收命令后的剩余文本，因此可以包含空格；支持 `§` 颜色代码和 `<color:#hex>...</color>` 标签。
+
+#### 设置显示别名
+```text
+/mcalias 名称或ID 别名
+/mcalias 名称或ID       # 清除别名
+```
+别名参数会吸收命令后的剩余文本，因此可以包含空格。别名只改变图片中的显示名称，不会改变服务器原名称、地址或 ID。
+
+#### 切换显示选项
+```text
+/mctoggle players       # 切换玩家列表
+/mctoggle notes         # 切换备注
+/mctoggle time          # 切换查询时间
+/mctoggle id            # 切换服务器序号
+```
+每次执行同一选项都会在开启和关闭之间切换。可用选项只有 `players`、`notes`、`time` 和 `id`。
 
 ## 自动清理功能
 
@@ -269,6 +317,9 @@ AstrBot Minecraft服务器信息查询插件，原astrbot_mcgetter_enhanced, 可
 ### 字体渲染测试
 
 ```bash
+# 命令 handler、别名、备注、显示开关和柱状图参数测试（不依赖网络）
+python tests/test_commands.py
+
 # Mock 图片、粗体、UniFont 与布局测试
 python tests/test_presets.py
 
@@ -303,7 +354,7 @@ tests/test_output_ping_127.0.0.1:43596_heavier_font_weight.png
 | `/mcpreset` | 名称 | 切换图片样式 preset |
 | `/mcnote` | 服务器名称/ID [备注内容] | 设置/清除服务器自定义备注（支持 § 颜色代码和 `<color:#hex>` 标签） |
 | `/mcalias` | 服务器名称/ID [别名] | 设置服务器显示别名 |
-| `/mctoggle` | players / notes / time | 切换玩家列表 / 备注 / 查询时间显示 |
+| `/mctoggle` | players / notes / time / id | 切换玩家列表 / 备注 / 查询时间 / 序号显示 |
 
 ### Rich 样式布局
 

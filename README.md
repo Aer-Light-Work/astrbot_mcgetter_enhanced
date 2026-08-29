@@ -314,20 +314,51 @@ AstrBot Minecraft服务器信息查询插件，原astrbot_mcgetter_enhanced, 可
 
 项目在 `resource/unifont_all-17.0.05.hex` 中提供 UniFont 位图回退：当主字体不包含某个 Unicode 字符时，渲染器会按字符切换到 UniFont，以降低缺字方块出现的概率。该回退适用于普通 Unicode 字符；Minecraft Mod 或资源包定义的私有区图标仍需要对应资源包字体，项目不会尝试还原。
 
-### 字体渲染测试
+### pytest 测试
 
 ```bash
-# 命令 handler、别名、备注、显示开关和柱状图参数测试（不依赖网络）
-python tests/test_commands.py
+# 首次运行时安装开发依赖
+uv pip install --python .venv/bin/python -r requirements-dev.txt
 
-# Mock 图片、粗体、UniFont 与布局测试
-python tests/test_presets.py
+# 聚合运行全部测试；真实服务器不可达时相关用例会跳过
+.venv/bin/python -m pytest -v
 
-# 真实服务器 MOTD 测试（当前测试地址：127.0.0.1:43596）
-python tests/test_server_ping.py
+# 仅运行不依赖真实服务器的回归测试
+.venv/bin/python -m pytest -v -m "not real_server"
 ```
 
-真实服务器测试会以同一份实时 MOTD 分别输出默认字体、非默认字体和整体加重字体的 Rich 图片，便于人工比较：
+测试已按职责拆分，可按 marker 或文件单独执行：
+
+```bash
+# 纯文字解析、字体、字重、UniFont、测量与换行
+.venv/bin/python -m pytest -v -m text_rendering
+
+# 使用 mock 数据完成整图渲染
+.venv/bin/python -m pytest -v -m image_rendering
+
+# preset 配置与命令 handler
+.venv/bin/python -m pytest -v -m presets
+.venv/bin/python -m pytest -v -m commands
+
+# 只 ping 真实 Minecraft 服务器，不生成图片
+.venv/bin/python -m pytest -v -m server_ping
+
+# 使用真实服务器数据完成 Rich 整图渲染
+.venv/bin/python -m pytest -v -m server_rendering
+
+# 也可直接指定模块
+.venv/bin/python -m pytest -v tests/test_image_rendering.py
+```
+
+真实服务器地址默认为 `127.0.0.1:43596`，可用逗号分隔的 `MC_TEST_SERVERS` 覆盖。服务器不可达时默认跳过；如需在 CI 或验收环境中严格失败，可设置 `MC_TEST_REQUIRE_SERVER=1`：
+
+```bash
+MC_TEST_SERVERS="127.0.0.1:43596,example.com:25565" \
+MC_TEST_REQUIRE_SERVER=1 \
+.venv/bin/python -m pytest -v -m real_server
+```
+
+真实整图测试会复用同一模块级实时状态，分别输出默认字体、非默认字体和整体加重字体的 Rich 图片，便于人工比较：
 
 ```text
 tests/test_output_ping_127.0.0.1:43596.png

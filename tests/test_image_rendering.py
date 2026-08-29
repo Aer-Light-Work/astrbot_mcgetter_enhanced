@@ -1,0 +1,96 @@
+"""使用本地 mock 数据生成完整服务器状态图片。"""
+
+import base64
+import io
+from pathlib import Path
+
+import pytest
+from PIL import Image
+
+from script.get_img import generate_server_info_image, load_render_font, set_custom_font_path
+from script.get_server_info import manual_parse_motd
+
+
+pytestmark = pytest.mark.image_rendering
+TESTS_DIR = Path(__file__).resolve().parent
+
+
+def assert_valid_png(encoded: str, expected_width: int | None = None) -> tuple[int, int]:
+    data = base64.b64decode(encoded, validate=True)
+    assert data.startswith(b"\x89PNG\r\n\x1a\n")
+    with Image.open(io.BytesIO(data)) as image:
+        image.load()
+        assert image.format == "PNG"
+        if expected_width is not None:
+            assert image.width == expected_width
+        return image.size
+
+
+async def test_generate_rich_image() -> None:
+    encoded = await generate_server_info_image(
+        players_list=[f"Player{i}" for i in range(1, 11)] + ["LongNamePlayerX", "TestUser"],
+        latency=25, server_name="测试服务器", plays_max=100, plays_online=4,
+        server_version="1.20.4", icon_base64=None, host_address="test.example.com",
+        preset_name="rich", motd_lines=manual_parse_motd("§a§l欢迎加入服务器！\n§6§o这是一个测试服务器"),
+        note_text=None, group_name="测试群",
+    )
+    assert_valid_png(encoded, 1177)
+
+
+async def test_generate_rich_image_with_long_motd() -> None:
+    motd = (
+        "这是一个非常非常长的服务器描述文本用于测试自动换行功能是否正常工作"
+        "当文本超出左栏宽度限制时应该自动换行到下一行显示以避免文字溢出图片边界"
+        "同时保证多行换行后的每一行都保持原有颜色和格式信息不丢失"
+    )
+    encoded = await generate_server_info_image(
+        players_list=[], latency=36, server_name="长MOTD测试服务器",
+        plays_max=114514, plays_online=3, server_version="1.20.4",
+        icon_base64=None, host_address="test.example.com", preset_name="rich",
+        motd_lines=manual_parse_motd(motd), note_text=None, group_name=None,
+    )
+    width, height = assert_valid_png(encoded, 1177)
+    assert width == 1177 and height > 226
+
+
+async def test_generate_rich_image_with_custom_font() -> None:
+    regular = TESTS_DIR / "SarasaUiSC-Regular.ttf"
+    set_custom_font_path(str(regular))
+    try:
+        font = await load_render_font(22)
+        assert Path(font.regular.path).resolve() == regular.resolve()
+        encoded = await generate_server_info_image(
+            players_list=["Player1", "Player2"], latency=20, server_name="字体测试",
+            plays_max=100, plays_online=2, server_version="1.20.4", icon_base64=None,
+            host_address="font.example.com", preset_name="rich", motd_lines=None,
+            note_text=None, group_name="字体测试群",
+        )
+        assert_valid_png(encoded, 1177)
+    finally:
+        set_custom_font_path(None)
+
+
+async def test_generate_simple_image() -> None:
+    encoded = await generate_server_info_image(
+        players_list=["Player1", "Player2"], latency=150, server_name="简洁测试",
+        plays_max=50, plays_online=2, server_version="1.20.4", icon_base64=None,
+        host_address="simple.example.com", preset_name="simple", motd_lines=None,
+        note_text=None, group_name=None,
+    )
+    width, height = assert_valid_png(encoded)
+    assert width > 0 and height > 0
+
+
+@pytest.mark.parametrize("note", [
+    "§a§l本服拥有专属私人房间系统§r\n§6支持公开房间模式 §b同时支持创建私人房间",
+    "<color:#FF55FF>品红色文字</color> <color:#FFFF55>黄色文字</color> §l粗体文字",
+    "§#ffcd1a我§#ffbf26能§#ffb032吞§#ffa23e下§#ff934a玻§#ff8556璃§#ff7661而§#ff686d不§#ff5979伤§#ff4b85身§#ff3c91体§#ff2e9d。",
+], ids=["section-sign-note", "color-tag-note", "hex-gradient-note"])
+async def test_generate_rich_image_with_colored_note(note: str) -> None:
+    encoded = await generate_server_info_image(
+        players_list=[], latency=10, server_name="备注测试", plays_max=100,
+        plays_online=5, server_version="1.20.4", icon_base64=None,
+        host_address="note.example.com", preset_name="rich", motd_lines=None,
+        note_text=note, group_name="备注测试群", display_override={"show_notes": True},
+    )
+    assert_valid_png(encoded, 1177)

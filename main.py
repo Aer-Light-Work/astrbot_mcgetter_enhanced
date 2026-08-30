@@ -756,20 +756,31 @@ class MyPlugin(Star):
             logger.error(f"执行 mctoggle 命令时出错: {e}")
             yield event.plain_result("切换显示选项时发生错误")
 
-    async def get_json_path(self, group_id: str) -> Path:
+    async def get_json_path(self, group_id: Optional[str]) -> Path:
         """
         获取群组的JSON配置文件路径
 
         Args:
-            group_id: 群组ID
+            group_id: 群组ID，不能为空且不能包含路径分隔符
 
         Returns:
             JSON文件的Path对象
         """
+        normalized_group_id = str(group_id or "").strip()
+        if not normalized_group_id:
+            raise ValueError("无法获取有效群组ID，拒绝创建未命名配置文件")
+        if (
+            normalized_group_id in {".", ".."}
+            or "/" in normalized_group_id
+            or "\\" in normalized_group_id
+            or "\x00" in normalized_group_id
+        ):
+            raise ValueError("群组ID包含非法路径字符")
+
         data_path = StarTools.get_data_dir("astrbot_mcgetter")
-        json_path = data_path / f'{group_id}.json'
+        json_path = data_path / f'{normalized_group_id}.json'
         json_path.parent.mkdir(parents=True, exist_ok=True)
-        logger.info(f"群号 {group_id} 的 JSON 文件路径: {json_path}")
+        logger.info(f"群号 {normalized_group_id} 的 JSON 文件路径: {json_path}")
         return json_path
 
     async def _bar_data_loop(self):

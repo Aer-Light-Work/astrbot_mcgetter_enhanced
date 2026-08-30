@@ -195,3 +195,23 @@ async def test_mcgetter_merges_server_images(tmp_path: Path, monkeypatch: pytest
     assert await collect(plugin.mcgetter(MockEvent())) == [["merged-image"]]
     assert observed["images"] == ["child-image", "child-image"]
     assert observed["query_time"] is not None
+
+
+async def test_get_json_path_rejects_empty_group_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """缺失群 ID 时不能创建 ``.json`` 或在数据目录外写入文件。"""
+    plugin = plugin_main.MyPlugin.__new__(plugin_main.MyPlugin)
+
+    class DataTools:
+        @staticmethod
+        def get_data_dir(_plugin_name: str) -> Path:
+            return tmp_path
+
+    monkeypatch.setattr(plugin_main, "StarTools", DataTools)
+
+    for invalid_group_id in (None, "", "   ", ".", "../outside", "group\\name"):
+        with pytest.raises(ValueError):
+            await plugin.get_json_path(invalid_group_id)
+
+    assert not (tmp_path / ".json").exists()
+    valid_path = await plugin.get_json_path("test-group-1")
+    assert valid_path == tmp_path / "test-group-1.json"

@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+from mcstatus.motd import Motd
 from PIL import Image, ImageDraw
 
 from script.get_img import (
@@ -15,7 +16,7 @@ from script.get_img import (
 )
 from script.get_server_info import (
     TextSegment,
-    manual_parse_motd,
+    parse_motd,
     parse_custom_note_text,
     parse_mc_color,
     parse_section_sign_text,
@@ -42,6 +43,7 @@ def test_parse_section_sign_text() -> None:
     segments = parse_section_sign_text("§a§l绿色粗体 §c§o红色斜体")
     assert segments[0].color == (85, 255, 85) and segments[0].bold
     assert segments[1].color == (255, 85, 85) and segments[1].italic
+    assert not segments[1].bold, "颜色代码应按 Java 版规则重置已有格式"
 
     gradient = "§#ffcd1a我§#ffbf26能§#ffb032吞§#ffa23e下§#ff934a玻§#ff8556璃§#ff7661而§#ff686d不§#ff5979伤§#ff4b85身§#ff3c91体§#ff2e9d。"
     segments = parse_section_sign_text(gradient)
@@ -73,10 +75,10 @@ def test_parse_custom_note_text() -> None:
 
 
 def test_parse_motd() -> None:
-    lines = manual_parse_motd("§a第一行\n§c第二行")
-    assert [line.plain_text() for line in lines] == ["第一行", "第二行"]
+    lines = parse_motd("§a第一行\n\n§c第三行")
+    assert [line.plain_text() for line in lines] == ["第一行", "", "第三行"]
 
-    lines = manual_parse_motd({
+    lines = parse_motd({
         "text": "",
         "extra": [
             {"text": "Hello ", "color": "green"},
@@ -87,6 +89,22 @@ def test_parse_motd() -> None:
     assert lines[0].plain_text() == "Hello World"
     assert lines[0].segments[-1].bold
 
+    motd = Motd.parse({"text": "渐变", "color": "#12abef", "underlined": True})
+    lines = parse_motd(motd)
+    assert lines[0].segments[0].color == (18, 171, 239)
+    assert lines[0].segments[0].underline
+
+    # WebColor 直接写入渲染模型，且不应像 Legacy 颜色代码那样清除继承样式。
+    lines = parse_motd({
+        "text": "A",
+        "bold": True,
+        "extra": [{"text": "B", "color": "#123456"}],
+    })
+    assert [(segment.text, segment.color, segment.bold) for segment in lines[0].segments] == [
+        ("A", None, True),
+        ("B", (18, 52, 86), True),
+    ]
+
 
 async def test_long_motd_wraps_within_width() -> None:
     motd = (
@@ -94,7 +112,7 @@ async def test_long_motd_wraps_within_width() -> None:
         "当文本超出左栏宽度限制时应该自动换行到下一行显示以避免文字溢出图片边界"
         "同时保证多行换行后的每一行都保持原有颜色和格式信息不丢失"
     )
-    segments = manual_parse_motd(motd)[0].segments
+    segments = parse_motd(motd)[0].segments
     font = await load_render_font(22)
     draw = ImageDraw.Draw(Image.new("RGB", (1177, 10)))
     wrapped = wrap_segments_to_lines(draw, segments, font, 992)

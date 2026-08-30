@@ -1,9 +1,11 @@
-from PIL import Image, ImageDraw, ImageFont
-import asyncio
+"""服务器状态图片的字体回退、文本绘制与布局实现。"""
+
+import base64
 import io
 from pathlib import Path
-import base64
-from typing import Optional, List, Tuple, Dict, Iterable
+from typing import Dict, Iterable, List, Optional, Tuple
+
+from PIL import Image, ImageDraw, ImageFont
 from astrbot.api import logger
 
 from .get_server_info import (
@@ -14,7 +16,6 @@ from .preset_manager import get_preset_manager
 # 自定义字体文件路径（可通过 set_custom_font_path 设置，默认为空使用系统加载逻辑）
 _custom_font_path: Optional[str] = None
 _custom_bold_font_path: Optional[str] = None
-_heavier_font_weight: bool = False
 
 
 class UniFontHex:
@@ -122,8 +123,7 @@ def set_custom_font_path(
     bold_font_path: 粗体字体文件路径（可选）。未指定时自动在同目录下查找 SemiBold/Bold 变体
     heavier_font_weight: 开启时以 SemiBold 作为常规字体、Bold 作为粗体字体
     """
-    global _custom_font_path, _custom_bold_font_path, _heavier_font_weight
-    _heavier_font_weight = heavier_font_weight
+    global _custom_font_path, _custom_bold_font_path
     if font_path:
         original_path = str(font_path)
         _custom_font_path = (
@@ -138,7 +138,6 @@ def set_custom_font_path(
     else:
         _custom_font_path = None
         _custom_bold_font_path = None
-        _heavier_font_weight = False
 
 
 def _find_font_variant(regular_path: str, variants: Tuple[str, ...]) -> Optional[str]:
@@ -725,10 +724,8 @@ async def _generate_rich_image(
     text_bold_font = None
     small_bold_font = None
 
-    # 服务器图标（无图标时用默认图标占位）
-    server_icon = load_default_icon() if not display.get("show_icon", True) is False else None
-    if display.get("show_icon", True):
-        server_icon = await fetch_icon(icon_base64)
+    # 服务器图标：缺失或解码失败时 fetch_icon 会回退到内置默认图标。
+    server_icon = await fetch_icon(icon_base64) if display.get("show_icon", True) else None
 
     # 解析备注
     note_segments = None

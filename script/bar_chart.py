@@ -1,9 +1,13 @@
-from typing import List, Dict, Any, Optional
-from PIL import Image, ImageDraw, ImageFont
-import io
+"""生成服务器在线人数趋势柱状图。"""
+
 import base64
+import io
 from datetime import datetime
 import math
+from pathlib import Path
+from typing import Any, Dict, List
+
+from PIL import Image, ImageDraw, ImageFont
 
 # ==========================
 # Styling & Layout Constants
@@ -31,7 +35,6 @@ TITLE_Y = 15
 
 # Grid / Axis
 GRID_LINES = 5
-DASH_PATTERN = (5, 3)
 Y_TICK_STEP = 5
 MIN_Y_MAX = 5
 
@@ -44,9 +47,8 @@ SHADOW_OFFSET = 2
 LABEL_GAP = 8
 
 
-def _load_font(size: int) -> ImageFont.FreeTypeFont:
-    """Load a CJK-capable font; prefer bundled Chinese font, then system CJK fonts, then DejaVu, last default."""
-    from pathlib import Path
+def _load_font(size: int) -> ImageFont.ImageFont:
+    """加载支持中文的字体，按内置、系统与 Pillow 默认字体顺序回退。"""
     candidates = [
         # Bundled font (preferred)
         Path(__file__).resolve().parent.parent / "resource" / "msyh.ttf",
@@ -76,6 +78,13 @@ def _load_font(size: int) -> ImageFont.FreeTypeFont:
     return ImageFont.load_default()
 
 
+def _encode_png(image: Image.Image) -> str:
+    """将 Pillow 图片编码为命令框架所需的 Base64 PNG。"""
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+
 def generate_bar_chart_image(history: List[Dict[str, Any]], server_name: str, hours: int = 24, width: int = 820, height: int = 400) -> str:
     """Render a polished hourly bar chart (柱状图) and return base64 PNG.
 
@@ -93,30 +102,6 @@ def generate_bar_chart_image(history: List[Dict[str, Any]], server_name: str, ho
     
     img = Image.new("RGB", (width, height), bg)
     draw = ImageDraw.Draw(img)
-
-    # Dashed line helper (compat: Pillow < 10 has no dash kw)
-    def dashed_line(p0: tuple[float, float], p1: tuple[float, float], *, fill, width: int = 1, dash: tuple[int, int] = DASH_PATTERN):
-        (x0, y0), (x1, y1) = p0, p1
-        on, off = dash
-        # Only implement axis-aligned dashes (horizontal/vertical), else fallback solid
-        if abs(y0 - y1) < 1e-6:
-            # horizontal
-            x = x0
-            while x < x1:
-                x2 = min(x + on, x1)
-                draw.line([(x, y0), (x2, y1)], fill=fill, width=width)
-                x = x2 + off
-            return
-        if abs(x0 - x1) < 1e-6:
-            # vertical
-            y = y0
-            while y < y1:
-                y2 = min(y + on, y1)
-                draw.line([(x0, y), (x1, y2)], fill=fill, width=width)
-                y = y2 + off
-            return
-        # fallback
-        draw.line([p0, p1], fill=fill, width=width)
 
     # layout - balanced margins
     l = MARGIN_LEFT
@@ -145,9 +130,7 @@ def generate_bar_chart_image(history: List[Dict[str, Any]], server_name: str, ho
 
     # data
     if not history:
-        buffer = io.BytesIO()
-        img.save(buffer, format="PNG")
-        return base64.b64encode(buffer.getvalue()).decode("utf-8")
+        return _encode_png(img)
 
     # Normalize to hourly timeline: ensure bars align with hour ticks
     def hour_bucket(ts: int) -> int:
@@ -162,9 +145,7 @@ def generate_bar_chart_image(history: List[Dict[str, Any]], server_name: str, ho
             raw[hour_bucket(ts)] = cnt
 
     if not raw:
-        buffer = io.BytesIO()
-        img.save(buffer, format="PNG")
-        return base64.b64encode(buffer.getvalue()).decode("utf-8")
+        return _encode_png(img)
 
     ts_sorted = sorted(raw.keys())
     start_ts = ts_sorted[0]
@@ -265,7 +246,6 @@ def generate_bar_chart_image(history: List[Dict[str, Any]], server_name: str, ho
         draw.rectangle([left + shadow_offset, top + shadow_offset, right + shadow_offset, y1 + shadow_offset], fill=(20, 20, 22))
         
         # Single solid color bar (consistent top and bottom)
-        bar_height = y1 - top
         radius = BAR_RADIUS
         draw.rounded_rectangle([left, top, right, y1], radius=radius, fill=accent)
         
@@ -283,6 +263,4 @@ def generate_bar_chart_image(history: List[Dict[str, Any]], server_name: str, ho
         draw.text((label_x, label_y + 1), label, fill=(12, 12, 14), font=axis_font)
         draw.text((label_x, label_y), label, fill=ACCENT_LIGHT, font=axis_font)
 
-    buffer = io.BytesIO()
-    img.save(buffer, format="PNG")
-    return base64.b64encode(buffer.getvalue()).decode("utf-8")
+    return _encode_png(img)

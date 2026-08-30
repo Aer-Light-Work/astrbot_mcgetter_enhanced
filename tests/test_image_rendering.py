@@ -8,7 +8,7 @@ import pytest
 from PIL import Image
 
 from script.get_img import generate_server_info_image, load_render_font, set_custom_font_path
-from script.get_server_info import manual_parse_motd
+from script.get_server_info import parse_motd
 
 
 pytestmark = pytest.mark.image_rendering
@@ -31,7 +31,7 @@ async def test_generate_rich_image() -> None:
         players_list=[f"Player{i}" for i in range(1, 11)] + ["LongNamePlayerX", "TestUser"],
         latency=25, server_name="测试服务器", plays_max=100, plays_online=4,
         server_version="1.20.4", icon_base64=None, host_address="test.example.com",
-        preset_name="rich", motd_lines=manual_parse_motd("§a§l欢迎加入服务器！\n§6§o这是一个测试服务器"),
+        preset_name="rich", motd_lines=parse_motd("§a§l欢迎加入服务器！\n§6§o这是一个测试服务器"),
         note_text=None, group_name="测试群",
     )
     assert_valid_png(encoded, 1177)
@@ -47,7 +47,7 @@ async def test_generate_rich_image_with_long_motd() -> None:
         players_list=[], latency=36, server_name="长MOTD测试服务器",
         plays_max=114514, plays_online=3, server_version="1.20.4",
         icon_base64=None, host_address="test.example.com", preset_name="rich",
-        motd_lines=manual_parse_motd(motd), note_text=None, group_name=None,
+        motd_lines=parse_motd(motd), note_text=None, group_name=None,
     )
     width, height = assert_valid_png(encoded, 1177)
     assert width == 1177 and height > 226

@@ -1,14 +1,16 @@
+"""群组服务器配置的读取、迁移与趋势数据维护。"""
+
+import asyncio
+import copy
 import json
 import os
-import asyncio
-from pathlib import Path
-import aiofiles
-from typing import Dict, Any, Optional, Tuple, List
 import time
 from datetime import datetime
-from astrbot.api import logger
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
-# 统一使用 AstrBot 提供的日志系统
+import aiofiles
+from astrbot.api import logger
 
 # 配置版本常量
 CURRENT_VERSION = "2.3"
@@ -20,6 +22,11 @@ DEFAULT_CONFIG = {
     # 多服务器柱状图/趋势数据：{"<server_id>": {"history": [{"ts": int, "count": int}]}}
     "trends": {}
 }
+
+
+def _new_default_config() -> Dict[str, Any]:
+    """返回独立的默认配置，避免嵌套 ``servers``/``trends`` 被不同群组共享。"""
+    return copy.deepcopy(DEFAULT_CONFIG)
 
 # 自动清理与历史保留配置
 AUTO_CLEANUP_DAYS = 10  # 10天未查询成功自动删除
@@ -62,7 +69,7 @@ def migrate_old_format(data: Dict[str, Any]) -> Dict[str, Any]:
     """
     logger.info("检测到旧版配置格式，开始自动迁移...")
     
-    new_data = DEFAULT_CONFIG.copy()
+    new_data = _new_default_config()
     next_id = 1
     
     for name, server_info in data.items():
@@ -136,8 +143,9 @@ async def read_json(json_path: str) -> Dict[str, Any]:
         path = Path(json_path)
         if not path.exists():
             logger.info(f"JSON文件不存在，创建新文件: {json_path}")
-            await write_json(json_path=json_path, new_data=DEFAULT_CONFIG)
-            return DEFAULT_CONFIG
+            data = _new_default_config()
+            await write_json(json_path=json_path, new_data=data)
+            return data
 
         # 若存在臨時檔殘留，優先忽略它，由原子替換保證最終一致
         try:
@@ -152,8 +160,9 @@ async def read_json(json_path: str) -> Dict[str, Any]:
             if content is None or not content.strip():
                 logger.error(f"JSON為空或僅空白，啟動自愈: {json_path}")
                 await _backup_corrupt_file(json_path, suffix="empty")
-                await write_json(json_path=json_path, new_data=DEFAULT_CONFIG)
-                return DEFAULT_CONFIG
+                data = _new_default_config()
+                await write_json(json_path=json_path, new_data=data)
+                return data
 
             # 避免在控制台輸出完整 JSON 內容，改為精簡日誌
             logger.debug(f"读取到的JSON内容（{len(content)} 字节）")
@@ -203,8 +212,9 @@ async def read_json(json_path: str) -> Dict[str, Any]:
         logger.error(f"JSON解析失败: {e}, 將嘗試備份並恢復默認配置，路徑: {json_path}")
         try:
             await _backup_corrupt_file(json_path, suffix="invalid")
-            await write_json(json_path=json_path, new_data=DEFAULT_CONFIG)
-            return DEFAULT_CONFIG
+            data = _new_default_config()
+            await write_json(json_path=json_path, new_data=data)
+            return data
         except Exception as ie:
             logger.error(f"自愈失敗: {ie}")
             raise json.JSONDecodeError(f"JSON解析失败且自愈失败: {e}", e.doc, e.pos)
@@ -438,7 +448,7 @@ def _hour_bucket(ts: int) -> int:
     return int(ts // 3600 * 3600)
 
 async def append_trend_point(json_path: str, server_id: str, ts: int, count: int) -> bool:
-    """为指定服务器追加或更新某整点的人数，最多保留24条。"""
+    """为指定服务器追加或更新某整点的人数，最多保留 168 条。"""
     try:
         data = await read_json(json_path)
         trends = data.get("trends", {})

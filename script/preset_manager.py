@@ -1,11 +1,10 @@
-"""
-Preset 配置管理模块
-负责加载、保存和管理图片生成预设配置
-"""
+"""图片生成 preset 的加载、回退与访问。"""
+
+import copy
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 import yaml
-from pathlib import Path
-from typing import Dict, Any, Optional, List
 from astrbot.api import logger
 
 
@@ -134,7 +133,8 @@ class PresetManager:
                 logger.warning(f"加载 preset 文件失败: {e}，使用内置默认值")
 
         # 使用内置默认值
-        self._presets = BUILTIN_PRESETS.copy()
+        # preset 可能被调用方按群组覆盖；内置嵌套配置必须彼此独立。
+        self._presets = copy.deepcopy(BUILTIN_PRESETS)
         logger.info(f"使用内置默认 presets: {list(self._presets.keys())}")
 
     def get_preset(self, name: Optional[str] = None) -> Dict[str, Any]:

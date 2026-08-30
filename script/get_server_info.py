@@ -16,9 +16,9 @@ from mcstatus.motd.components import JavaFormatting, JavaMinecraftColor, WebColo
 
 CSU_HOST = "csu-mc.org"
 CSU_PLAYERS_URL = "https://map.magicalsheep.cn/tiles/players.json"
-# mcstatus 的默认 DNS/SRV 查找时限是 3 秒；跨网 DNS 解析偶发变慢时容易让 /mcadd
-# 的预查询误报失败，因此给 Java 地址查找和后续状态查询保留更充足的时间。
-SERVER_LOOKUP_TIMEOUT = 10
+# mcstatus 的默认 DNS/SRV 查找时限是 3 秒；为兼顾慢 DNS 的容错与 /mcadd 的交互体验，
+# 仅额外保留 2 秒。
+SERVER_LOOKUP_TIMEOUT = 5
 
 # Minecraft 颜色代码映射
 MC_COLOR_CODES = {

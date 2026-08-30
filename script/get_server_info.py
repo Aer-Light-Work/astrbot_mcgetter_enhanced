@@ -16,6 +16,9 @@ from mcstatus.motd.components import JavaFormatting, JavaMinecraftColor, WebColo
 
 CSU_HOST = "csu-mc.org"
 CSU_PLAYERS_URL = "https://map.magicalsheep.cn/tiles/players.json"
+# mcstatus 的默认 DNS/SRV 查找时限是 3 秒；跨网 DNS 解析偶发变慢时容易让 /mcadd
+# 的预查询误报失败，因此给 Java 地址查找和后续状态查询保留更充足的时间。
+SERVER_LOOKUP_TIMEOUT = 10
 
 # Minecraft 颜色代码映射
 MC_COLOR_CODES = {
@@ -338,9 +341,16 @@ def _default_icon_base64() -> str:
 
 
 async def get_server_status(host: str) -> Optional[dict[str, Any]]:
-    """查询 Java 服务器状态，失败时记录原因并返回 ``None``。"""
+    """查询 Java 服务器状态，失败时记录原因并返回 ``None``。
+
+    必须使用 ``JavaServer.async_lookup()``，而非直接以输入地址构造实例；前者会
+    按 Java 客户端规则查询 ``_minecraft._tcp`` SRV 记录并使用其中的目标与端口。
+    """
     try:
-        server = await JavaServer.async_lookup(host)
+        server = await JavaServer.async_lookup(host, timeout=SERVER_LOOKUP_TIMEOUT)
+        logger.debug(
+            f"Minecraft 地址解析完成: {host} -> {server.address.host}:{server.address.port}"
+        )
         status = await server.async_status(version=767)
 
         # sample 可能为 None；保留服务端给出的原始玩家顺序。

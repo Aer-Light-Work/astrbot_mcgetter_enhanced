@@ -362,6 +362,14 @@ MC_TEST_REQUIRE_SERVER=1 \
 .venv/bin/python -m pytest -v -m real_server
 ```
 
+若要验证 `/mcadd` 的 Java SRV 预查询，可在本机临时提供测试地址；地址不会写入测试文件：
+
+```bash
+MC_TEST_SRV_SERVER="your-srv-server.example" \
+MC_TEST_REQUIRE_SERVER=1 \
+.venv/bin/python -m pytest -v -m srv_lookup
+```
+
 真实整图测试会复用同一模块级实时状态，分别输出默认字体、非默认字体和整体加重字体的 Rich 图片，便于人工比较：
 
 ```text

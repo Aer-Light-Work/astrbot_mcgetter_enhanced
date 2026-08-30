@@ -1,14 +1,17 @@
 """使用本地 mock 数据生成完整服务器状态图片。"""
 
 import base64
+import copy
 import io
 from pathlib import Path
 
 import pytest
 from PIL import Image
 
+import script.get_img as get_img
 from script.get_img import generate_server_info_image, load_render_font, set_custom_font_path
 from script.get_server_info import parse_motd
+from script.preset_manager import BUILTIN_PRESETS
 
 
 pytestmark = pytest.mark.image_rendering
@@ -42,6 +45,27 @@ async def test_generate_rich_image() -> None:
         note_text=None, group_name="测试群",
     )
     assert_valid_png(encoded, 1177, "rich")
+
+
+async def test_rich_image_uses_configured_title(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Rich preset 的 title 必须始终显示，且允许 preset 覆盖默认值。"""
+    preset = copy.deepcopy(BUILTIN_PRESETS["rich"])
+    preset["title"] = "自定义状态标题"
+    captured_titles: list[str] = []
+    original = get_img.draw_segments_centered
+
+    def capture_title(*args, **kwargs):
+        captured_titles.append("".join(segment.text for segment in args[3]))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(get_img, "draw_segments_centered", capture_title)
+    encoded = await get_img._generate_rich_image(
+        players_list=[], latency=1, server_name="测试服务器", plays_max=20,
+        plays_online=1, server_version="1.20.4", preset=preset,
+    )
+
+    assert_valid_png(encoded, 1177, "rich_custom_title")
+    assert captured_titles == ["自定义状态标题"]
 
 
 async def test_generate_rich_image_with_long_motd() -> None:

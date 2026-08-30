@@ -13,6 +13,7 @@ BUILTIN_PRESETS: Dict[str, Dict[str, Any]] = {
     "rich": {
         "name": "丰富样式",
         "style": "rich",
+        "title": "Minecraft Server Status",
         "colors": {
             "background": [15, 15, 15],
             "title": [255, 255, 255],

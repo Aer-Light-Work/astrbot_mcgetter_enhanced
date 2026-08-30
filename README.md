@@ -436,6 +436,7 @@ Rich 样式完整支持 Minecraft 原版格式代码：
 
 编辑 `resource/presets.yaml` 可添加自定义样式，支持配置：
 - 颜色方案（背景、标题、文字、延迟等）
+- Rich 顶部标题（`title`，默认 `Minecraft Server Status`）
 - 显示/隐藏各信息字段
 - 字体大小
 - 布局参数（宽度、内边距、图标尺寸等）

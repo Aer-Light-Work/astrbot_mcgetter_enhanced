@@ -744,6 +744,8 @@ async def _generate_rich_image(
     LATENCY_BAD = tuple(colors.get("latency_bad", [255, 85, 85]))
     TIMESTAMP_COLOR = tuple(colors.get("timestamp", [120, 120, 120]))
 
+    # Rich 顶部标题由 preset 配置；group_name 仅作为旧 preset 的兼容回退。
+    rich_title = str(preset.get("title") or group_name or "Minecraft Server Status")
     group_title_size = fonts_cfg.get("group_title_size", 44)
     title_size = fonts_cfg.get("title_size", 26)      # 服务器别名大小（与 MOTD 差距不宜过大）
     text_size = fonts_cfg.get("text_size", 22)        # MOTD / 版本 / 延迟 大小
@@ -859,7 +861,7 @@ async def _generate_rich_image(
     # 计算总高度
     y = padding
     group_title_h = 0
-    if group_name:
+    if rich_title:
         group_title_h = group_title_size + 16
     total_height = (
         padding
@@ -878,11 +880,11 @@ async def _generate_rich_image(
 
     right_x = img_width - padding
 
-    # 1. 群名称标题（居中、加粗、大字号）
-    if group_name:
+    # 1. preset 顶部标题（居中、加粗、大字号）
+    if rich_title:
         draw_segments_centered(
             draw, img_width // 2, y,
-            [TextSegment(text=group_name, color=TITLE_COLOR, bold=True)],
+            [TextSegment(text=rich_title, color=TITLE_COLOR, bold=True)],
             group_title_font, TITLE_COLOR,
             group_title_bold_font,
         )

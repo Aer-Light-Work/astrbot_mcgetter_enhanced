@@ -2,6 +2,7 @@
 
 import base64
 import io
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -519,6 +520,7 @@ async def generate_server_info_image(
     note_text: Optional[str] = None,
     group_name: Optional[str] = None,
     display_override: Optional[dict] = None,
+    suppress_preset_title: bool = False,
 ) -> str:
     """生成服务器信息图片并返回base64编码"""
 
@@ -538,13 +540,90 @@ async def generate_server_info_image(
         return await _generate_rich_image(
             players_list, latency, server_name, plays_max, plays_online,
             server_version, icon_base64, host_address, preset,
-            motd_lines, note_text, group_name,
+            motd_lines, note_text, group_name, suppress_preset_title,
         )
     else:
         return await _generate_simple_image(
             players_list, latency, server_name, plays_max, plays_online,
             server_version, icon_base64, host_address, preset,
         )
+
+
+async def merge_server_info_images(
+    images_base64: list[str],
+    query_time: datetime,
+    preset_name: Optional[str] = None,
+    display_override: Optional[dict] = None,
+) -> str:
+    """将多台服务器的状态图纵向合并，并在底部仅绘制一次查询时间。
+
+    调用方应先关闭各子图的 ``show_query_time``，传入最后一台成功查询服务器的
+    查询时刻。这样合并图不会出现重复时间戳。
+    """
+    if not images_base64:
+        raise ValueError("至少需要一张服务器状态图才能合并")
+
+    images: list[Image.Image] = []
+    for encoded in images_base64:
+        data = base64.b64decode(encoded, validate=True)
+        with Image.open(io.BytesIO(data)) as source:
+            source.load()
+            images.append(source.convert("RGB"))
+
+    preset = get_preset_manager().get_preset(preset_name)
+    display = dict(preset.get("display", {}))
+    if display_override:
+        display.update(display_override)
+    colors = preset.get("colors", {})
+    background = tuple(colors.get("background", [15, 15, 15]))
+    title_color = tuple(colors.get("title", [255, 255, 255]))
+    timestamp_color = tuple(colors.get("timestamp", [120, 120, 120]))
+
+    title = ""
+    title_height = 0
+    title_font: Optional[RenderFont] = None
+    if preset.get("style") == "rich":
+        title = str(preset.get("title") or "Minecraft Server Status")
+        if title:
+            title_size = preset.get("fonts", {}).get("group_title_size", 44)
+            title_font = await load_render_font(title_size)
+            title_height = title_size + 16
+
+    timestamp_height = 0
+    timestamp_font: Optional[RenderFont] = None
+    if display.get("show_query_time", True):
+        small_size = preset.get("fonts", {}).get("small_size", 18)
+        timestamp_font = await load_render_font(small_size)
+        timestamp_height = small_size + 10
+
+    width = max(image.width for image in images)
+    height = title_height + sum(image.height for image in images) + timestamp_height
+    merged = Image.new("RGB", (width, height), color=background)
+
+    y = title_height
+    for image in images:
+        merged.paste(image, ((width - image.width) // 2, y))
+        y += image.height
+
+    draw = ImageDraw.Draw(merged)
+    if title_font is not None:
+        draw_segments_centered(
+            draw, width // 2, preset.get("layout", {}).get("padding", 30),
+            [TextSegment(text=title, color=title_color, bold=True)],
+            title_font, title_color,
+        )
+
+    if timestamp_font is not None:
+        time_text = query_time.strftime("%Y-%m-%d %H:%M:%S")
+        draw_segments_right_aligned(
+            draw, width - 10, height - timestamp_font.size - 6,
+            [TextSegment(text=time_text, color=timestamp_color, bold=True)],
+            timestamp_font, timestamp_color,
+        )
+
+    buffer = io.BytesIO()
+    merged.save(buffer, format="PNG")
+    return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
 
 async def _generate_simple_image(
@@ -709,6 +788,7 @@ async def _generate_rich_image(
     motd_lines: Optional[list] = None,
     note_text: Optional[str] = None,
     group_name: Optional[str] = None,
+    suppress_preset_title: bool = False,
 ) -> str:
     """
     丰富样式布局（参考图）：
@@ -745,7 +825,9 @@ async def _generate_rich_image(
     TIMESTAMP_COLOR = tuple(colors.get("timestamp", [120, 120, 120]))
 
     # Rich 顶部标题由 preset 配置；group_name 仅作为旧 preset 的兼容回退。
-    rich_title = str(preset.get("title") or group_name or "Minecraft Server Status")
+    rich_title = "" if suppress_preset_title else str(
+        preset.get("title") or group_name or "Minecraft Server Status"
+    )
     group_title_size = fonts_cfg.get("group_title_size", 44)
     title_size = fonts_cfg.get("title_size", 26)      # 服务器别名大小（与 MOTD 差距不宜过大）
     text_size = fonts_cfg.get("text_size", 22)        # MOTD / 版本 / 延迟 大小

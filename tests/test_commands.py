@@ -148,3 +148,50 @@ async def test_command_handlers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(plugin_main, "get_server_status", fail_if_called)
     add_result = await collect(plugin.mcadd(event, "强制添加服", "127.0.0.1:25565", True))
     assert add_result == ["成功添加服务器 强制添加服 (ID: 2)"], add_result
+
+
+async def test_mcgetter_merges_server_images(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """/mc 应把所有成功查询结果合并为一张图，并关闭子图时间戳。"""
+    json_path = tmp_path / "merged-images.json"
+    await write_json(str(json_path), {
+        "version": "2.3",
+        "next_id": 3,
+        "servers": {
+            "1": {"id": 1, "name": "服务器一", "host": "one.example"},
+            "2": {"id": 2, "name": "服务器二", "host": "two.example"},
+        },
+        "trends": {},
+    })
+    plugin = plugin_main.MyPlugin.__new__(plugin_main.MyPlugin)
+
+    async def get_json_path(_group_id: str) -> Path:
+        return json_path
+
+    observed: dict[str, Any] = {}
+
+    async def get_img(
+        *_args,
+        suppress_query_time: bool = False,
+        suppress_title: bool = False,
+        **_kwargs,
+    ) -> str:
+        assert suppress_query_time
+        assert suppress_title
+        return "child-image"
+
+    async def merge_images(images, query_time, **_kwargs) -> str:
+        observed["images"] = images
+        observed["query_time"] = query_time
+        return "merged-image"
+
+    async def no_cleanup(_path: Path):
+        return []
+
+    plugin.get_json_path = get_json_path
+    plugin.get_img = get_img
+    monkeypatch.setattr(plugin_main, "merge_server_info_images", merge_images)
+    monkeypatch.setattr(plugin_main, "auto_cleanup_servers", no_cleanup)
+
+    assert await collect(plugin.mcgetter(MockEvent())) == [["merged-image"]]
+    assert observed["images"] == ["child-image", "child-image"]
+    assert observed["query_time"] is not None

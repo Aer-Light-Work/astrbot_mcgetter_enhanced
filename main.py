@@ -11,7 +11,7 @@ except ImportError:
     GreedyStr = str
 from .script.get_img import set_custom_font_path
 from .script.get_server_info import get_server_status
-from .script.get_img import generate_server_info_image
+from .script.get_img import generate_server_info_image, merge_server_info_images
 from .script.bar_chart import generate_bar_chart_image
 from .script.json_operate import (
     read_json, add_data, del_data, update_data, 
@@ -32,7 +32,7 @@ MC 服务器管理帮助
 
 【查询】
 /mc
-查询本群已保存的所有服务器，并生成状态图片。
+查询本群已保存的所有服务器，并合并生成一张状态长图。
 
 /mcget <名称或ID>
 查看服务器地址。
@@ -146,21 +146,36 @@ class MyPlugin(Star):
                 yield event.plain_result("请先使用 /mcadd 添加服务器")
                 return
             
-            message_chain: List[Comp.Image] = []
+            rendered_images: list[str] = []
+            last_query_time: Optional[datetime] = None
             servers = json_data.get("servers", {})
             # 按 ID 升序遍历
             for server_id, server_info in sorted(servers.items(), key=lambda kv: int(kv[0]) if str(kv[0]).isdigit() else 1_000_000_000):
                 try:
                     logger.info(f"正在处理服务器: {server_info['name']} (ID: {server_id}), 信息: {server_info}")
-                    mcinfo_img = await self.get_img(server_info['name'], server_info['host'], server_id, str(json_path))
+                    mcinfo_img = await self.get_img(
+                        server_info['name'], server_info['host'], server_id, str(json_path),
+                        suppress_query_time=True, suppress_title=True,
+                    )
                     if mcinfo_img:
-                        message_chain.append(Comp.Image.fromBase64(mcinfo_img))
-                        logger.info(f"成功添加图片到消息链，服务器名称: {server_info['name']} (ID: {server_id})")
+                        rendered_images.append(mcinfo_img)
+                        last_query_time = datetime.now()
+                        logger.info(f"成功加入合并图，服务器名称: {server_info['name']} (ID: {server_id})")
                     else:
                         logger.warning(f"获取服务器 {server_info['name']} (ID: {server_id}) 的图片失败")
                 except Exception as e:
                     logger.error(f"处理服务器 {server_info['name']} (ID: {server_id}) 时出错: {e}")
                     continue
+
+            message_chain: List[Comp.Image] = []
+            if rendered_images:
+                merged_image = await merge_server_info_images(
+                    rendered_images,
+                    last_query_time or datetime.now(),
+                    preset_name=json_data.get("preset"),
+                    display_override=json_data.get("display") or None,
+                )
+                message_chain.append(Comp.Image.fromBase64(merged_image))
 
             # 查询更新完成后再执行自动清理，避免误删刚成功的服务器
             deleted_servers = await auto_cleanup_servers(json_path)
@@ -176,7 +191,7 @@ class MyPlugin(Star):
                 return
 
             if message_chain:
-                logger.info(f"成功生成消息链，包含 {len(message_chain)} 张图片")
+                logger.info("成功生成一张合并状态图")
                 yield event.chain_result(message_chain)
             else:
                 logger.warning("没有可用的服务器信息")
@@ -476,7 +491,15 @@ class MyPlugin(Star):
             logger.error(f"生成柱状图失败: {e}")
             yield event.plain_result("生成柱状图失败，请稍后再试。")
 
-    async def get_img(self, server_name: str, host: str, server_id: Optional[str] = None, json_path: Optional[str] = None) -> Optional[str]:
+    async def get_img(
+        self,
+        server_name: str,
+        host: str,
+        server_id: Optional[str] = None,
+        json_path: Optional[str] = None,
+        suppress_query_time: bool = False,
+        suppress_title: bool = False,
+    ) -> Optional[str]:
         """
         获取服务器信息图片
 
@@ -485,6 +508,8 @@ class MyPlugin(Star):
             host: 服务器地址
             server_id: 服务器ID（可选）
             json_path: JSON文件路径（用于更新状态）
+            suppress_query_time: 合并图片时关闭子图的重复时间戳
+            suppress_title: 合并图片时关闭子图的重复顶部标题
 
         Returns:
             图片的base64编码字符串，如果获取失败则返回None
@@ -534,6 +559,10 @@ class MyPlugin(Star):
                 except Exception as e:
                     logger.debug(f"读取群配置失败: {e}")
 
+            if suppress_query_time:
+                display_override = dict(display_override or {})
+                display_override["show_query_time"] = False
+
             # 使用别名作为显示名称
             base_name = alias_name if alias_name else server_name
             display_name = f"[{server_id}]{base_name}" if (server_id and show_id) else base_name
@@ -552,6 +581,7 @@ class MyPlugin(Star):
                 note_text=note_text,
                 group_name=None,
                 display_override=display_override,
+                suppress_preset_title=suppress_title,
             )
             logger.info(f"成功生成服务器 {server_name} 的图片")
             return mcinfo_img

@@ -3,13 +3,19 @@
 import base64
 import copy
 import io
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 from PIL import Image
 
 import script.get_img as get_img
-from script.get_img import generate_server_info_image, load_render_font, set_custom_font_path
+from script.get_img import (
+    generate_server_info_image,
+    load_render_font,
+    merge_server_info_images,
+    set_custom_font_path,
+)
 from script.get_server_info import parse_motd
 from script.preset_manager import BUILTIN_PRESETS
 
@@ -66,6 +72,37 @@ async def test_rich_image_uses_configured_title(monkeypatch: pytest.MonkeyPatch)
 
     assert_valid_png(encoded, 1177, "rich_custom_title")
     assert captured_titles == ["自定义状态标题"]
+
+
+async def test_merge_server_images_uses_one_final_timestamp() -> None:
+    """合并图只额外增加一块底部时间戳区域；关闭开关时不额外增加高度。"""
+    child_options = {"show_query_time": False}
+    first = await generate_server_info_image(
+        players_list=[], latency=1, server_name="服务器一", plays_max=20,
+        plays_online=1, server_version="1.20.4", preset_name="rich",
+        display_override=child_options, suppress_preset_title=True,
+    )
+    second = await generate_server_info_image(
+        players_list=[], latency=2, server_name="服务器二", plays_max=20,
+        plays_online=2, server_version="1.20.4", preset_name="rich",
+        display_override=child_options, suppress_preset_title=True,
+    )
+    first_size = assert_valid_png(first)
+    second_size = assert_valid_png(second)
+
+    merged = await merge_server_info_images(
+        [first, second], datetime(2026, 1, 2, 3, 4, 5), preset_name="rich",
+    )
+    width, height = assert_valid_png(merged, 1177, "merged_servers")
+    assert width == 1177
+    assert height > first_size[1] + second_size[1]
+
+    without_timestamp = await merge_server_info_images(
+        [first, second], datetime(2026, 1, 2, 3, 4, 5), preset_name="rich",
+        display_override={"show_query_time": False},
+    )
+    _, height_without_timestamp = assert_valid_png(without_timestamp)
+    assert first_size[1] + second_size[1] < height_without_timestamp < height
 
 
 async def test_generate_rich_image_with_long_motd() -> None:

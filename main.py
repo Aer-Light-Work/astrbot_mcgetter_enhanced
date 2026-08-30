@@ -132,10 +132,7 @@ class MyPlugin(Star):
         """
         logger.info("开始执行 mc 命令")
         try:
-            group_id = event.get_group_id()
-            logger.info(f"获取到群组ID: {group_id}")
-            
-            json_path = await self.get_json_path(group_id)
+            json_path = await self.get_event_json_path(event)
             logger.info(f"JSON文件路径: {json_path}")
             
             json_data = await read_json(json_path)
@@ -226,8 +223,7 @@ class MyPlugin(Star):
                 yield event.plain_result("预查询失败，请检查服务器是否在线或地址是否正确，或在完整的/mcadd命令后加上True 强制添加")
                 return
                 
-            group_id = event.get_group_id()
-            json_path = await self.get_json_path(group_id)
+            json_path = await self.get_event_json_path(event)
             
             # 检查当前地址是否已存在
             try:
@@ -273,8 +269,7 @@ class MyPlugin(Star):
         """
         logger.info(f"开始执行 mcdel 命令: {identifier}")
         try:
-            group_id = event.get_group_id()
-            json_path = await self.get_json_path(group_id)
+            json_path = await self.get_event_json_path(event)
             
             if await del_data(json_path, identifier):
                 yield event.plain_result(f"成功删除服务器 {identifier}")
@@ -292,8 +287,7 @@ class MyPlugin(Star):
         """
         logger.info(f"开始执行 mcget 命令: {identifier}")
         try:
-            group_id = event.get_group_id()
-            json_path = await self.get_json_path(group_id)
+            json_path = await self.get_event_json_path(event)
             
             server_info = await get_server_info(json_path, identifier)
             if not server_info:
@@ -333,8 +327,7 @@ class MyPlugin(Star):
                 yield event.plain_result("服务器地址格式不正确，只能包含字母、数字和符号.:-")
                 return
                 
-            group_id = event.get_group_id()
-            json_path = await self.get_json_path(group_id)
+            json_path = await self.get_event_json_path(event)
             
             if await update_data(json_path, identifier, new_name, new_host):
                 # 获取更新后的服务器信息
@@ -357,8 +350,7 @@ class MyPlugin(Star):
         """
         logger.info("开始执行 mclist 命令")
         try:
-            group_id = event.get_group_id()
-            json_path = await self.get_json_path(group_id)
+            json_path = await self.get_event_json_path(event)
             
             servers = await get_all_servers(json_path)
             if not servers:
@@ -382,8 +374,7 @@ class MyPlugin(Star):
         """
         logger.info("开始执行 mccleanup 命令")
         try:
-            group_id = event.get_group_id()
-            json_path = await self.get_json_path(group_id)
+            json_path = await self.get_event_json_path(event)
             
             deleted_servers = await auto_cleanup_servers(json_path)
             if deleted_servers:
@@ -403,8 +394,7 @@ class MyPlugin(Star):
     async def mcdata(self, event: AstrMessageEvent, identifier: Optional[str] = None, hours: int = 24) -> Optional[MessageEventResult]:
         """输出当前群全部或指定服务器最近N小时（默认24）的在线人数柱状图。"""
         try:
-            group_id = event.get_group_id()
-            json_path = await self.get_json_path(group_id)
+            json_path = await self.get_event_json_path(event)
             servers = await get_all_servers(str(json_path))
             if not servers:
                 yield event.plain_result("当前群无已配置服务器，请先使用 /mcadd 添加。")
@@ -617,8 +607,7 @@ class MyPlugin(Star):
     async def mcpreset(self, event: AstrMessageEvent, name: Optional[str] = None) -> MessageEventResult:
         """查看/切换图片样式preset"""
         try:
-            group_id = event.get_group_id()
-            json_path = await self.get_json_path(group_id)
+            json_path = await self.get_event_json_path(event)
             pm = get_preset_manager()
 
             if name is None:
@@ -648,8 +637,7 @@ class MyPlugin(Star):
     async def mcnote(self, event: AstrMessageEvent, identifier: str, note_text_arg: GreedyStr = "") -> MessageEventResult:
         """设置/清除服务器自定义备注"""
         try:
-            group_id = event.get_group_id()
-            json_path = await self.get_json_path(group_id)
+            json_path = await self.get_event_json_path(event)
 
             # 查找服务器
             sinfo = await get_server_info(str(json_path), identifier)
@@ -683,8 +671,7 @@ class MyPlugin(Star):
     async def mcalias(self, event: AstrMessageEvent, identifier: str, alias_text_arg: GreedyStr = "") -> MessageEventResult:
         """设置服务器显示别名"""
         try:
-            group_id = event.get_group_id()
-            json_path = await self.get_json_path(group_id)
+            json_path = await self.get_event_json_path(event)
 
             sinfo = await get_server_info(str(json_path), identifier)
             if not sinfo:
@@ -716,8 +703,7 @@ class MyPlugin(Star):
     async def mctoggle(self, event: AstrMessageEvent, option: str) -> MessageEventResult:
         """切换显示选项：players/notes/time/id"""
         try:
-            group_id = event.get_group_id()
-            json_path = await self.get_json_path(group_id)
+            json_path = await self.get_event_json_path(event)
 
             option = option.lower()
             valid_options = {
@@ -782,6 +768,24 @@ class MyPlugin(Star):
         json_path.parent.mkdir(parents=True, exist_ok=True)
         logger.info(f"群号 {normalized_group_id} 的 JSON 文件路径: {json_path}")
         return json_path
+
+    async def get_event_json_path(self, event: AstrMessageEvent) -> Path:
+        """为群聊或私聊事件生成隔离的持久化配置路径。"""
+        try:
+            group_id = event.get_group_id()
+        except Exception:
+            group_id = None
+        if str(group_id or "").strip():
+            return await self.get_json_path(group_id)
+
+        sender_getter = getattr(event, "get_sender_id", None)
+        try:
+            sender_id = sender_getter() if callable(sender_getter) else None
+        except Exception:
+            sender_id = None
+        if not str(sender_id or "").strip():
+            raise ValueError("无法获取群组ID或私聊发送者ID")
+        return await self.get_json_path(f"private_{sender_id}")
 
     async def _bar_data_loop(self):
         """每小时扫描所有群配置，按 host 去重采样一次并写回所有群，保证跨群一致。"""

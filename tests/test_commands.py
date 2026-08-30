@@ -17,6 +17,9 @@ class MockEvent:
     def get_group_id(self) -> str:
         return "command-test-group"
 
+    def get_sender_id(self) -> str:
+        return "command-test-user"
+
     def plain_result(self, value: str) -> str:
         return value
 
@@ -215,3 +218,26 @@ async def test_get_json_path_rejects_empty_group_id(tmp_path: Path, monkeypatch:
     assert not (tmp_path / ".json").exists()
     valid_path = await plugin.get_json_path("test-group-1")
     assert valid_path == tmp_path / "test-group-1.json"
+
+
+async def test_get_event_json_path_uses_sender_for_private_chat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """私聊没有群 ID 时，应以发送者 ID 创建独立配置而非 `.json`。"""
+    plugin = plugin_main.MyPlugin.__new__(plugin_main.MyPlugin)
+
+    class DataTools:
+        @staticmethod
+        def get_data_dir(_plugin_name: str) -> Path:
+            return tmp_path
+
+    class PrivateEvent(MockEvent):
+        def get_group_id(self) -> str:
+            return ""
+
+        def get_sender_id(self) -> str:
+            return "private-user-42"
+
+    monkeypatch.setattr(plugin_main, "StarTools", DataTools)
+    assert await plugin.get_event_json_path(PrivateEvent()) == tmp_path / "private_private-user-42.json"
+    assert not (tmp_path / ".json").exists()

@@ -4,10 +4,12 @@ import base64
 import io
 from datetime import datetime
 import math
-from pathlib import Path
 from typing import Any, Dict, List
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
+
+from .get_img import draw_segments, load_render_font_sync, measure_text
+from .get_server_info import TextSegment
 
 # ==========================
 # Styling & Layout Constants
@@ -47,35 +49,32 @@ SHADOW_OFFSET = 2
 LABEL_GAP = 8
 
 
-def _load_font(size: int) -> ImageFont.ImageFont:
-    """加载支持中文的字体，按内置、系统与 Pillow 默认字体顺序回退。"""
-    candidates = [
-        # Bundled font (preferred)
-        Path(__file__).resolve().parent.parent / "resource" / "msyh.ttf",
-        # Linux common CJK fonts
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttf",
-        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
-        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-        "/usr/share/fonts/zh_CN/msyh.ttf",
-        # Windows
-        "C:/Windows/Fonts/msyh.ttc",
-        "C:/Windows/Fonts/simhei.ttf",
-        "C:/Windows/Fonts/simsun.ttc",
-        # macOS
-        "/System/Library/Fonts/PingFang.ttc",
-        "/System/Library/Fonts/STHeiti Light.ttc",
-        "/System/Library/Fonts/Songti.ttc",
-        # DejaVu (non-CJK; last resort before default)
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    ]
-    for p in candidates:
-        try:
-            path_str = str(p)
-            return ImageFont.truetype(path_str, size)
-        except Exception:
-            continue
-    return ImageFont.load_default()
+def _load_font(size: int):
+    """复用服务器状态图片的 Noto Sans / UniFont 字体回退策略。"""
+    return load_render_font_sync(size)
+
+
+def _text_size(draw: ImageDraw.ImageDraw, text: str, font) -> tuple[int, int]:
+    """按最终实际字体（含 UniFont）测量文字。"""
+    return measure_text(draw, text, font), font.size
+
+
+def _draw_text(
+    draw: ImageDraw.ImageDraw,
+    position: tuple[float, float],
+    text: str,
+    color: tuple[int, int, int],
+    font,
+) -> None:
+    """按统一回退策略绘制一段普通文字。"""
+    draw_segments(
+        draw,
+        round(position[0]),
+        round(position[1]),
+        [TextSegment(text=text)],
+        font,
+        color,
+    )
 
 
 def _encode_png(image: Image.Image) -> str:
@@ -119,7 +118,7 @@ def generate_bar_chart_image(history: List[Dict[str, Any]], server_name: str, ho
     except Exception:
         hrs = 24
     title = f"{server_name} · {hrs}小时在线人数"
-    draw.text((l, TITLE_Y), title, fill=fg, font=title_font)
+    _draw_text(draw, (l, TITLE_Y), title, fg, title_font)
 
     # bounds
     plot_w = width - l - r
@@ -166,25 +165,13 @@ def generate_bar_chart_image(history: List[Dict[str, Any]], server_name: str, ho
     max_c = max(counts) if counts else 1
     min_c = 0
     
-    # helper for text size (Pillow兼容:优先使用textbbox) - 必须先定义
-    def text_size(s: str, f: ImageFont.ImageFont) -> tuple[int, int]:
-        try:
-            bx = draw.textbbox((0, 0), s, font=f)
-            return bx[2] - bx[0], bx[3] - bx[1]
-        except Exception:
-            # 极端退化
-            try:
-                return int(draw.textlength(s, font=f)), int(f.size)
-            except Exception:
-                return (len(s) * 8, 12)
-    
     # Calculate statistics
     avg_c = sum(counts) // len(counts) if counts else 0
     
     # Draw statistics info
     stat_text = f"最大: {max_c}  平均: {avg_c}  数据点: {n}"
-    tw, th = text_size(stat_text, stat_font)
-    draw.text((width - r - tw, 18), stat_text, fill=stat_color, font=stat_font)
+    tw, th = _text_size(draw, stat_text, stat_font)
+    _draw_text(draw, (width - r - tw, 18), stat_text, stat_color, stat_font)
 
     def x_at(i: int) -> float:
         """Center of bar i over hourly ticks across the full width."""
@@ -211,8 +198,8 @@ def generate_bar_chart_image(history: List[Dict[str, Any]], server_name: str, ho
         draw.line([(x0, y), (x1, y)], fill=line_color, width=1)
         val = int(round(min_c + (y_max - min_c) * frac))
         text = str(val)
-        tw, th = text_size(text, axis_font)
-        draw.text((x0 - 12 - tw, y - th/2), text, fill=fg, font=axis_font)
+        tw, th = _text_size(draw, text, axis_font)
+        _draw_text(draw, (x0 - 12 - tw, y - th / 2), text, fg, axis_font)
     
     # 平均值虚线省略（右上角已显示平均值）
 
@@ -227,8 +214,8 @@ def generate_bar_chart_image(history: List[Dict[str, Any]], server_name: str, ho
         draw.line([(x, y1), (x, y1 + 5)], fill=grid, width=1)
         ts = timeline[i]
         lab = datetime.fromtimestamp(ts).strftime("%H:%M")
-        tw, th = text_size(lab, axis_font)
-        draw.text((x - tw/2, y1 + 8), lab, fill=fg, font=axis_font)
+        tw, th = _text_size(draw, lab, axis_font)
+        _draw_text(draw, (x - tw / 2, y1 + 8), lab, fg, axis_font)
 
     # bars with enhanced visual effects
     xs = [x_at(i) for i in range(n)]
@@ -253,14 +240,14 @@ def generate_bar_chart_image(history: List[Dict[str, Any]], server_name: str, ho
         
         # Value label with better positioning logic
         label = str(c)
-        tw, th = text_size(label, axis_font)
+        tw, th = _text_size(draw, label, axis_font)
         
         # 始终绘制在柱顶上方；空间不足时贴紧上边界（不放入柱内）
         gap = LABEL_GAP
         label_y = max(y0 + 2, top - th - gap)
         label_x = max(x0 + 2, min(x1 - tw - 2, cx - tw/2))
         # 阴影 + 文字
-        draw.text((label_x, label_y + 1), label, fill=(12, 12, 14), font=axis_font)
-        draw.text((label_x, label_y), label, fill=ACCENT_LIGHT, font=axis_font)
+        _draw_text(draw, (label_x, label_y + 1), label, (12, 12, 14), axis_font)
+        _draw_text(draw, (label_x, label_y), label, ACCENT_LIGHT, axis_font)
 
     return _encode_png(img)

@@ -312,7 +312,7 @@ AstrBot Minecraft服务器信息查询插件，原astrbot_mcgetter_enhanced, 可
 - 自动查找会跳过 `Italic` 变体，避免把斜体误作常规或粗体字体。
 - 没有可用的真实粗体文件时，会将常规字形向右复制 1px 作为 fallback；不会使用四周扩张的描边，因此可避免明显的边缘光晕。测量、对齐与换行会使用同一实际字重的宽度。
 
-项目在 `resource/unifont_all-17.0.05.hex` 中提供 UniFont 位图回退：当主字体不包含某个 Unicode 字符时，渲染器会按字符切换到 UniFont，以降低缺字方块出现的概率。该回退适用于普通 Unicode 字符；Minecraft Mod 或资源包定义的私有区图标仍需要对应资源包字体，项目不会尝试还原。
+未设置自定义字体时，项目会优先使用系统安装的 Noto Sans。若系统没有 Noto Sans，则直接以 `resource/unifont_all-17.0.05.hex` 完成渲染；即使使用 Noto Sans，遇到其不包含的 Unicode 字符也会按字符切换到 UniFont，以降低缺字方块出现的概率。Minecraft Mod 或资源包定义的私有区图标仍需要对应资源包字体，项目不会尝试还原。
 
 ### pytest 测试
 

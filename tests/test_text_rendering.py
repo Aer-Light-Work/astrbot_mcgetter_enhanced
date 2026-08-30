@@ -158,6 +158,19 @@ async def test_bold_and_unifont_fallback() -> None:
         set_custom_font_path(None)
 
 
+async def test_unifont_is_default_without_system_noto(monkeypatch: pytest.MonkeyPatch) -> None:
+    """未配置自定义字体且系统没有 Noto Sans 时，完整文本应优先走 UniFont。"""
+    import script.get_img as get_img
+
+    set_custom_font_path(None)
+    monkeypatch.setattr(get_img, "_load_system_noto_font", lambda _size: None)
+    font = await load_render_font(24)
+
+    assert font.use_unifont
+    assert font.source_for("中") == "unifont"
+    assert font.source_for("A") == "unifont"
+
+
 async def test_non_default_font_without_bold_uses_measured_fallback() -> None:
     regular = TESTS_DIR / "SarasaUiSC-Regular.ttf"
     set_custom_font_path(str(regular), str(TESTS_DIR / "missing-bold-font.ttf"))

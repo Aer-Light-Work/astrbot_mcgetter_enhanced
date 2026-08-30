@@ -17,6 +17,17 @@ from .preset_manager import get_preset_manager
 _custom_font_path: Optional[str] = None
 _custom_bold_font_path: Optional[str] = None
 
+# 不打包商业字体；仅使用系统已安装的 Noto Sans CJK。
+_SYSTEM_NOTO_FONT_PATHS = (
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttf",
+    "/usr/share/fonts/opentype/noto/NotoSans-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+    "C:/Windows/Fonts/NotoSansCJK-Regular.ttc",
+    "/Library/Fonts/NotoSansCJK-Regular.ttc",
+    "/Library/Fonts/NotoSans-Regular.ttf",
+)
+
 
 class UniFontHex:
     """GNU UniFont .hex 的按需位图字形读取器。"""
@@ -73,10 +84,17 @@ _unifont = UniFontHex(Path(__file__).resolve().parent.parent / "resource" / "uni
 class RenderFont:
     """一个字号下的主 TrueType 字体、粗体字体与 UniFont 回退集合。"""
 
-    def __init__(self, regular: ImageFont.ImageFont, bold: Optional[ImageFont.ImageFont], size: int):
+    def __init__(
+        self,
+        regular: ImageFont.ImageFont,
+        bold: Optional[ImageFont.ImageFont],
+        size: int,
+        use_unifont: bool = False,
+    ):
         self.regular = regular
         self.bold = bold
         self.size = size
+        self.use_unifont = use_unifont
 
     @staticmethod
     def _has_glyph(font: ImageFont.ImageFont, char: str) -> bool:
@@ -91,6 +109,8 @@ class RenderFont:
             return False
 
     def source_for(self, char: str, bold: bool = False) -> str:
+        if self.use_unifont and _unifont.glyph(char):
+            return "unifont"
         font = self.bold if bold and self.bold is not None else self.regular
         if self._has_glyph(font, char):
             return "ttf-bold" if bold and self.bold is not None else "ttf"
@@ -166,52 +186,71 @@ def _guess_bold_font_path(regular_path: str) -> Optional[str]:
     return _find_font_variant(regular_path, ("SemiBold", "Bold"))
 
 
-async def load_font(font_size, bold: bool = False):
-    """加载字体，bold=True 时优先加载粗体字体文件"""
+def _load_system_noto_font(font_size: int) -> Optional[ImageFont.ImageFont]:
+    """加载系统安装的 Noto Sans；未安装时返回 ``None``。"""
+    for path in _SYSTEM_NOTO_FONT_PATHS:
+        try:
+            return ImageFont.truetype(path, font_size)
+        except OSError:
+            continue
+    return None
+
+
+def _load_pillow_default_font(font_size: int) -> ImageFont.ImageFont:
+    """提供仅用于 UniFont 缺字时的 Pillow 最小回退字体。"""
+    try:
+        return ImageFont.load_default(size=font_size)
+    except TypeError:
+        return ImageFont.load_default()
+
+
+def _load_font_with_source(
+    font_size: int,
+    bold: bool = False,
+) -> tuple[ImageFont.ImageFont, bool]:
+    """返回字体及是否应由 UniFont 作为默认渲染来源。"""
     # 粗体：优先使用粗体字体文件
     if bold and _custom_bold_font_path:
         try:
-            return ImageFont.truetype(_custom_bold_font_path, font_size)
+            return ImageFont.truetype(_custom_bold_font_path, font_size), False
         except OSError as e:
             logger.warning(f"粗体字体加载失败: {_custom_bold_font_path}: {e}，回退到常规字体")
 
     # 用户自定义字体路径优先
     if _custom_font_path:
         try:
-            return ImageFont.truetype(_custom_font_path, font_size)
+            return ImageFont.truetype(_custom_font_path, font_size), False
         except OSError as e:
-            logger.warning(f"自定义字体加载失败: {_custom_font_path}: {e}，回退到系统默认字体")
+            logger.warning(f"自定义字体加载失败: {_custom_font_path}: {e}，回退到系统 Noto Sans")
 
-    # 尝试多路径加载
-    font_paths = [
-        Path(__file__).resolve().parent.parent / 'resource' / 'msyh.ttf',
-        'msyh.ttf',  # 当前目录
-        '/usr/share/fonts/zh_CN/msyh.ttf',  # Linux常见路径
-        'C:/Windows/Fonts/msyh.ttc',  # Windows路径
-        '/System/Library/Fonts/Supplemental/Songti.ttc'  # macOS路径
-    ]
+    system_font = _load_system_noto_font(font_size)
+    if system_font is not None:
+        return system_font, False
 
-    for path in font_paths:
-        try:
-            return ImageFont.truetype(str(path), font_size)
-        except OSError:
-            continue
+    logger.warning("未找到系统 Noto Sans，使用内置 UniFont 渲染文本")
+    return _load_pillow_default_font(font_size), True
 
-    # 全部失败时使用默认字体（添加中文支持）
-    try:
-        return ImageFont.load_default().font_variant(size=font_size)
-    except:
-        return ImageFont.load_default()
+
+async def load_font(font_size: int, bold: bool = False) -> ImageFont.ImageFont:
+    """加载主字体；缺少 Noto Sans 时返回 UniFont 的最小 Pillow 配套字体。"""
+    return _load_font_with_source(font_size, bold)[0]
+
+
+def load_render_font_sync(font_size: int) -> RenderFont:
+    """同步加载渲染字体，供柱状图等同步绘制器复用同一回退策略。"""
+    regular, use_unifont = _load_font_with_source(font_size)
+    bold, bold_uses_unifont = _load_font_with_source(font_size, bold=True)
+    if use_unifont or bold_uses_unifont:
+        bold = None
+        use_unifont = True
+    elif bold is regular or getattr(bold, "path", None) == getattr(regular, "path", None):
+        bold = None
+    return RenderFont(regular, bold, font_size, use_unifont=use_unifont)
 
 
 async def load_render_font(font_size: int) -> RenderFont:
     """加载一组用于实际绘制、测量与 UniFont 回退的字体。"""
-    regular = await load_font(font_size)
-    bold = await load_font(font_size, bold=True)
-    # load_font 在没有粗体变体时会回退常规字体；此时描边模拟比伪装为真粗体更准确。
-    if bold is regular or getattr(bold, "path", None) == getattr(regular, "path", None):
-        bold = None
-    return RenderFont(regular, bold, font_size)
+    return load_render_font_sync(font_size)
 
 
 async def fetch_icon(icon_base64: Optional[str] = None) -> Optional[Image.Image]:

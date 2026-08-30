@@ -350,6 +350,10 @@ uv pip install --python .venv/bin/python -r requirements-dev.txt
 .venv/bin/python -m pytest -v tests/test_image_rendering.py
 ```
 
+图片渲染测试会把生成的 PNG 导出到 `tests/test_output_*.png`（已被 Git 忽略），
+可在每次运行后直接检查：mock 数据的 Rich/Simple/备注图片、柱状图，以及真实服务器
+的三种字体图片都会保存在这里。
+
 真实服务器地址默认为 `127.0.0.1:43596`，可用逗号分隔的 `MC_TEST_SERVERS` 覆盖。服务器不可达时默认跳过；如需在 CI 或验收环境中严格失败，可设置 `MC_TEST_REQUIRE_SERVER=1`：
 
 ```bash

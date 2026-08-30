@@ -2,6 +2,7 @@
 
 import base64
 import io
+from pathlib import Path
 
 import pytest
 from PIL import Image
@@ -10,6 +11,7 @@ from script.bar_chart import generate_bar_chart_image
 
 
 pytestmark = pytest.mark.image_rendering
+TESTS_DIR = Path(__file__).resolve().parent
 
 
 @pytest.mark.parametrize(
@@ -22,8 +24,11 @@ pytestmark = pytest.mark.image_rendering
         ],
     ],
 )
-def test_bar_chart_is_valid_png(history) -> None:
+def test_bar_chart_is_valid_png(history, request: pytest.FixtureRequest) -> None:
     encoded = generate_bar_chart_image(history, "测试服务器")
-    with Image.open(io.BytesIO(base64.b64decode(encoded))) as image:
+    data = base64.b64decode(encoded)
+    output_name = request.node.callspec.id
+    (TESTS_DIR / f"test_output_chart_{output_name}.png").write_bytes(data)
+    with Image.open(io.BytesIO(data)) as image:
         assert image.format == "PNG"
         assert image.size == (820, 400)

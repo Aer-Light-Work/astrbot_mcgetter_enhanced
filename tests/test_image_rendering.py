@@ -15,9 +15,16 @@ pytestmark = pytest.mark.image_rendering
 TESTS_DIR = Path(__file__).resolve().parent
 
 
-def assert_valid_png(encoded: str, expected_width: int | None = None) -> tuple[int, int]:
+def assert_valid_png(
+    encoded: str,
+    expected_width: int | None = None,
+    output_name: str | None = None,
+) -> tuple[int, int]:
+    """校验图片；指定名称时同时导出至 tests/ 供人工检查。"""
     data = base64.b64decode(encoded, validate=True)
     assert data.startswith(b"\x89PNG\r\n\x1a\n")
+    if output_name:
+        (TESTS_DIR / f"test_output_mock_{output_name}.png").write_bytes(data)
     with Image.open(io.BytesIO(data)) as image:
         image.load()
         assert image.format == "PNG"
@@ -34,7 +41,7 @@ async def test_generate_rich_image() -> None:
         preset_name="rich", motd_lines=parse_motd("§a§l欢迎加入服务器！\n§6§o这是一个测试服务器"),
         note_text=None, group_name="测试群",
     )
-    assert_valid_png(encoded, 1177)
+    assert_valid_png(encoded, 1177, "rich")
 
 
 async def test_generate_rich_image_with_long_motd() -> None:
@@ -49,7 +56,7 @@ async def test_generate_rich_image_with_long_motd() -> None:
         icon_base64=None, host_address="test.example.com", preset_name="rich",
         motd_lines=parse_motd(motd), note_text=None, group_name=None,
     )
-    width, height = assert_valid_png(encoded, 1177)
+    width, height = assert_valid_png(encoded, 1177, "rich_long_motd")
     assert width == 1177 and height > 226
 
 
@@ -65,7 +72,7 @@ async def test_generate_rich_image_with_custom_font() -> None:
             host_address="font.example.com", preset_name="rich", motd_lines=None,
             note_text=None, group_name="字体测试群",
         )
-        assert_valid_png(encoded, 1177)
+        assert_valid_png(encoded, 1177, "rich_custom_font")
     finally:
         set_custom_font_path(None)
 
@@ -77,20 +84,20 @@ async def test_generate_simple_image() -> None:
         host_address="simple.example.com", preset_name="simple", motd_lines=None,
         note_text=None, group_name=None,
     )
-    width, height = assert_valid_png(encoded)
+    width, height = assert_valid_png(encoded, output_name="simple")
     assert width > 0 and height > 0
 
 
-@pytest.mark.parametrize("note", [
-    "§a§l本服拥有专属私人房间系统§r\n§6支持公开房间模式 §b同时支持创建私人房间",
-    "<color:#FF55FF>品红色文字</color> <color:#FFFF55>黄色文字</color> §l粗体文字",
-    "§#ffcd1a我§#ffbf26能§#ffb032吞§#ffa23e下§#ff934a玻§#ff8556璃§#ff7661而§#ff686d不§#ff5979伤§#ff4b85身§#ff3c91体§#ff2e9d。",
+@pytest.mark.parametrize("note, output_name", [
+    ("§a§l本服拥有专属私人房间系统§r\n§6支持公开房间模式 §b同时支持创建私人房间", "rich_section_sign_note"),
+    ("<color:#FF55FF>品红色文字</color> <color:#FFFF55>黄色文字</color> §l粗体文字", "rich_color_tag_note"),
+    ("§#ffcd1a我§#ffbf26能§#ffb032吞§#ffa23e下§#ff934a玻§#ff8556璃§#ff7661而§#ff686d不§#ff5979伤§#ff4b85身§#ff3c91体§#ff2e9d。", "rich_hex_gradient_note"),
 ], ids=["section-sign-note", "color-tag-note", "hex-gradient-note"])
-async def test_generate_rich_image_with_colored_note(note: str) -> None:
+async def test_generate_rich_image_with_colored_note(note: str, output_name: str) -> None:
     encoded = await generate_server_info_image(
         players_list=[], latency=10, server_name="备注测试", plays_max=100,
         plays_online=5, server_version="1.20.4", icon_base64=None,
         host_address="note.example.com", preset_name="rich", motd_lines=None,
         note_text=note, group_name="备注测试群", display_override={"show_notes": True},
     )
-    assert_valid_png(encoded, 1177)
+    assert_valid_png(encoded, 1177, output_name)

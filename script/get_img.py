@@ -28,6 +28,7 @@ _SYSTEM_NOTO_FONT_PATHS = (
     "/Library/Fonts/NotoSansCJK-Regular.ttc",
     "/Library/Fonts/NotoSans-Regular.ttf",
 )
+_SYMBOL_FONT_PATH = Path(__file__).resolve().parent.parent / "resource" / "NotoSansSymbols2-Regular.ttf"
 
 
 class UniFontHex:
@@ -83,7 +84,7 @@ _unifont = UniFontHex(Path(__file__).resolve().parent.parent / "resource" / "uni
 
 
 class RenderFont:
-    """一个字号下的主 TrueType 字体、粗体字体与 UniFont 回退集合。"""
+    """一个字号下的主字体、符号字体与 UniFont 回退集合。"""
 
     def __init__(
         self,
@@ -91,11 +92,13 @@ class RenderFont:
         bold: Optional[ImageFont.ImageFont],
         size: int,
         use_unifont: bool = False,
+        symbol: Optional[ImageFont.ImageFont] = None,
     ):
         self.regular = regular
         self.bold = bold
         self.size = size
         self.use_unifont = use_unifont
+        self.symbol = symbol
 
     @staticmethod
     def _has_glyph(font: ImageFont.ImageFont, char: str) -> bool:
@@ -110,11 +113,11 @@ class RenderFont:
             return False
 
     def source_for(self, char: str, bold: bool = False) -> str:
-        if self.use_unifont and _unifont.glyph(char):
-            return "unifont"
         font = self.bold if bold and self.bold is not None else self.regular
-        if self._has_glyph(font, char):
+        if not self.use_unifont and self._has_glyph(font, char):
             return "ttf-bold" if bold and self.bold is not None else "ttf"
+        if self.symbol is not None and self._has_glyph(self.symbol, char):
+            return "symbol"
         return "unifont" if _unifont.glyph(char) else "ttf"
 
     def advance(self, char: str, bold: bool = False) -> int:
@@ -122,10 +125,10 @@ class RenderFont:
         if source == "unifont":
             glyph = _unifont.glyph(char)
             return max(1, round(glyph[0] * self.size / 16)) if glyph else 0
-        font = self.bold if source == "ttf-bold" else self.regular
+        font = self.symbol if source == "symbol" else self.bold if source == "ttf-bold" else self.regular
         width = int(round(font.getlength(char)))
         # 没有真实粗体文件时，draw_segments 会在右侧复制一个整数像素。
-        if bold and self.bold is None:
+        if bold and (source == "symbol" or self.bold is None):
             width += 1
         return width
 
@@ -205,6 +208,15 @@ def _load_pillow_default_font(font_size: int) -> ImageFont.ImageFont:
         return ImageFont.load_default()
 
 
+def _load_symbol_font(font_size: int) -> Optional[ImageFont.ImageFont]:
+    """加载随插件携带的 Noto Sans Symbols 2 矢量符号字体。"""
+    try:
+        return ImageFont.truetype(_SYMBOL_FONT_PATH, font_size)
+    except OSError as error:
+        logger.warning(f"符号字体加载失败: {_SYMBOL_FONT_PATH}: {error}")
+        return None
+
+
 def _load_font_with_source(
     font_size: int,
     bold: bool = False,
@@ -246,7 +258,11 @@ def load_render_font_sync(font_size: int) -> RenderFont:
         use_unifont = True
     elif bold is regular or getattr(bold, "path", None) == getattr(regular, "path", None):
         bold = None
-    return RenderFont(regular, bold, font_size, use_unifont=use_unifont)
+    return RenderFont(
+        regular, bold, font_size,
+        use_unifont=use_unifont,
+        symbol=_load_symbol_font(font_size),
+    )
 
 
 async def load_render_font(font_size: int) -> RenderFont:
@@ -365,8 +381,12 @@ def draw_segments(
                 for char in run:
                     current_x += _draw_unifont_char(image, current_x, y, char, render_font, color, seg.bold)
                 continue
-            active_font = render_font.bold if source == "ttf-bold" else render_font.regular
-            if seg.bold and source == "ttf" and render_font.bold is None:
+            active_font = (
+                render_font.symbol if source == "symbol"
+                else render_font.bold if source == "ttf-bold"
+                else render_font.regular
+            )
+            if seg.bold and (source == "symbol" or (source == "ttf" and render_font.bold is None)):
                 # 不使用 stroke_width：描边会在字形四周制造抗锯齿光晕。
                 # 仅向右复制一个整数像素，模拟增加字重并保持边缘收敛。
                 draw.text((current_x, y), run, font=active_font, fill=color)

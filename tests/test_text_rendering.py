@@ -137,7 +137,7 @@ async def test_bold_and_unifont_fallback() -> None:
         assert Path(font.bold.path).resolve() == bold.resolve()
         fallback_char = next(
             chr(codepoint)
-            for codepoint in (0x1F0A1, 0x1F4A9, 0x1F300)
+            for codepoint in (0x10000,)
             if _unifont.glyph(chr(codepoint))
         )
         assert font.source_for(fallback_char) == "unifont"

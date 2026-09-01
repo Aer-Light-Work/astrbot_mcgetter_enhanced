@@ -322,11 +322,15 @@ def _draw_unifont_char(
     bitmap = Image.frombytes("1", (width, height), data)
     scaled_width = max(1, round(width * font.size / 16))
     scaled_height = max(1, round(height * font.size / 16))
-    bitmap = bitmap.resize((scaled_width, scaled_height), Image.Resampling.NEAREST)
+    # UniFont 是 16px 位图；先转灰度掩膜并高质量缩放，避免 ✦ 等 Unicode
+    # 符号在非原始字号下被最近邻放大成明显锯齿。
+    bitmap = bitmap.convert("L").resize(
+        (scaled_width, scaled_height), Image.Resampling.LANCZOS,
+    )
     # UniFont 的 16px 字高以基线为参考，与当前 TrueType 字体基线对齐。
     glyph_y = y + font.ascent() - scaled_height
     colored = Image.new("RGB", bitmap.size, color)
-    image.paste(colored, (x, glyph_y), bitmap.convert("L"))
+    image.paste(colored, (x, glyph_y), bitmap)
     if bold:
         image.paste(colored, (x + 1, glyph_y), bitmap.convert("L"))
     return scaled_width

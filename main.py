@@ -200,7 +200,7 @@ class MyPlugin(Star):
 
     @filter.command("mcadd")
     async def mcadd(
-        self, event: AstrMessageEvent, name: str = "", host: str = "", force: bool = False,
+        self, event: AstrMessageEvent, name: str = "", host: str = "", force: str = "",
     ) -> MessageEventResult:
         """
         添加新的服务器
@@ -222,13 +222,21 @@ class MyPlugin(Star):
                 )
                 return
 
-            logger.info(f"开始执行 mcadd 命令: {name} -> {host}, force: {force}")
+            force_text = str(force).strip().lower()
+            if force_text not in {"", "true", "false"}:
+                yield event.plain_result(
+                    "用法：/mcadd <服务器名称> <服务器地址> [True]\n"
+                    "说明：末尾仅可填写 True 以跳过预查询。"
+                )
+                return
+            force_enabled = force_text == "true"
+            logger.info(f"开始执行 mcadd 命令: {name} -> {host}, force: {force_enabled}")
 
             # 检查host合法性
             if not re.match(r'^[a-zA-Z0-9.:-]+$', host):
                 yield event.plain_result("服务器地址格式不正确，只能包含字母、数字和符号.:-")
                 return
-            elif not force and await get_server_status(host) is None:
+            elif not force_enabled and await get_server_status(host) is None:
                 yield event.plain_result("预查询失败，请检查服务器是否在线或地址是否正确，或在完整的/mcadd命令后加上True 强制添加")
                 return
                 
@@ -265,7 +273,7 @@ class MyPlugin(Star):
             yield event.plain_result("添加服务器时发生错误")
 
     @filter.command("mcdel")
-    async def mcdel(self, event: AstrMessageEvent, identifier: str) -> MessageEventResult:
+    async def mcdel(self, event: AstrMessageEvent, identifier: str = "") -> MessageEventResult:
         """
         删除指定的服务器（支持通过名称或ID删除）
 
@@ -276,8 +284,11 @@ class MyPlugin(Star):
         Returns:
             操作结果消息
         """
-        logger.info(f"开始执行 mcdel 命令: {identifier}")
         try:
+            if not identifier:
+                yield event.plain_result("用法：/mcdel <名称或ID>\n示例：/mcdel 1")
+                return
+            logger.info(f"开始执行 mcdel 命令: {identifier}")
             json_path = await self.get_event_json_path(event)
             
             if await del_data(json_path, identifier):
@@ -290,12 +301,15 @@ class MyPlugin(Star):
             yield event.plain_result("删除服务器时发生错误")
 
     @filter.command("mcget")
-    async def mcget(self, event: AstrMessageEvent, identifier: str) -> MessageEventResult:
+    async def mcget(self, event: AstrMessageEvent, identifier: str = "") -> MessageEventResult:
         """
         获取指定服务器的信息（支持通过名称或ID查找）
         """
-        logger.info(f"开始执行 mcget 命令: {identifier}")
         try:
+            if not identifier:
+                yield event.plain_result("用法：/mcget <名称或ID>\n示例：/mcget 1")
+                return
+            logger.info(f"开始执行 mcget 命令: {identifier}")
             json_path = await self.get_event_json_path(event)
             
             server_info = await get_server_info(json_path, identifier)
@@ -311,7 +325,7 @@ class MyPlugin(Star):
             yield event.plain_result("获取服务器信息时发生错误")
 
     @filter.command("mcup")
-    async def mcup(self, event: AstrMessageEvent, identifier: str, new_name: Optional[str] = None, new_host: Optional[str] = None) -> MessageEventResult:
+    async def mcup(self, event: AstrMessageEvent, identifier: str = "", new_name: Optional[str] = None, new_host: Optional[str] = None) -> MessageEventResult:
         """
         更新服务器信息（支持通过名称或ID更新）
 
@@ -324,9 +338,14 @@ class MyPlugin(Star):
         Returns:
             操作结果消息
         """
-        logger.info(f"开始执行 mcup 命令: {identifier}, new_name: {new_name}, new_host: {new_host}")
-        
         try:
+            if not identifier:
+                yield event.plain_result(
+                    "用法：/mcup <名称或ID> [新名称] [新地址]\n示例：/mcup 1 新生存服"
+                )
+                return
+            logger.info(f"开始执行 mcup 命令: {identifier}, new_name: {new_name}, new_host: {new_host}")
+
             if not new_name and not new_host:
                 yield event.plain_result("请提供要更新的信息（新名称或新地址）")
                 return
@@ -400,9 +419,18 @@ class MyPlugin(Star):
             yield event.plain_result("自动清理时发生错误")
 
     @filter.command("mcdata")
-    async def mcdata(self, event: AstrMessageEvent, identifier: Optional[str] = None, hours: int = 24) -> Optional[MessageEventResult]:
+    async def mcdata(self, event: AstrMessageEvent, identifier: Optional[str] = None, hours: str = "24") -> Optional[MessageEventResult]:
         """输出当前群全部或指定服务器最近N小时（默认24）的在线人数柱状图。"""
         try:
+            try:
+                normalized_hours = int(hours)
+            except (TypeError, ValueError):
+                yield event.plain_result(
+                    "小时数必须是 1 到 168 的整数。\n"
+                    "用法：/mcdata [名称或ID] [小时数]\n示例：/mcdata 1 48"
+                )
+                return
+
             json_path = await self.get_event_json_path(event)
             servers = await get_all_servers(str(json_path))
             if not servers:
@@ -421,7 +449,7 @@ class MyPlugin(Star):
                     if maybe is None:
                         # 视为小时数
                         try:
-                            hours = int(ident_str)
+                            normalized_hours = int(ident_str)
                             identifier = None
                         except Exception:
                             identifier = ident_str
@@ -431,10 +459,7 @@ class MyPlugin(Star):
                     identifier = ident_str
 
             # 规范化 hours 范围
-            try:
-                hours = int(hours)
-            except Exception:
-                hours = 24
+            hours = normalized_hours
             hours = max(1, min(168, hours))
             logger.info(f"mcdata 解析后: target={'ALL' if not identifier else identifier}, hours={hours}")
 
@@ -643,9 +668,14 @@ class MyPlugin(Star):
             yield event.plain_result("切换 preset 时发生错误")
 
     @filter.command("mcnote")
-    async def mcnote(self, event: AstrMessageEvent, identifier: str, note_text_arg: GreedyStr = "") -> MessageEventResult:
+    async def mcnote(self, event: AstrMessageEvent, identifier: str = "", note_text_arg: GreedyStr = "") -> MessageEventResult:
         """设置/清除服务器自定义备注"""
         try:
+            if not identifier:
+                yield event.plain_result(
+                    "用法：/mcnote <名称或ID> [备注]\n示例：/mcnote 1 欢迎来到服务器"
+                )
+                return
             json_path = await self.get_event_json_path(event)
 
             # 查找服务器
@@ -677,9 +707,14 @@ class MyPlugin(Star):
             yield event.plain_result("设置备注时发生错误")
 
     @filter.command("mcalias")
-    async def mcalias(self, event: AstrMessageEvent, identifier: str, alias_text_arg: GreedyStr = "") -> MessageEventResult:
+    async def mcalias(self, event: AstrMessageEvent, identifier: str = "", alias_text_arg: GreedyStr = "") -> MessageEventResult:
         """设置服务器显示别名"""
         try:
+            if not identifier:
+                yield event.plain_result(
+                    "用法：/mcalias <名称或ID> [别名]\n示例：/mcalias 1 生存服"
+                )
+                return
             json_path = await self.get_event_json_path(event)
 
             sinfo = await get_server_info(str(json_path), identifier)
@@ -709,9 +744,14 @@ class MyPlugin(Star):
             yield event.plain_result("设置别名时发生错误")
 
     @filter.command("mctoggle")
-    async def mctoggle(self, event: AstrMessageEvent, option: str) -> MessageEventResult:
+    async def mctoggle(self, event: AstrMessageEvent, option: str = "") -> MessageEventResult:
         """切换显示选项：players/notes/time/id"""
         try:
+            if not option:
+                yield event.plain_result(
+                    "用法：/mctoggle <players|notes|time|id>\n示例：/mctoggle players"
+                )
+                return
             json_path = await self.get_event_json_path(event)
 
             option = option.lower()

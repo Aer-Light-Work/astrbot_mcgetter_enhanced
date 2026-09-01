@@ -43,6 +43,45 @@ async def test_mcadd_missing_parameters_shows_friendly_usage() -> None:
     assert await collect(plugin.mcadd(MockEvent(), "生存服")) == expected
 
 
+async def test_command_parameter_errors_show_friendly_usage() -> None:
+    """各命令的缺参和类型错误应返回中文用法，而非框架内部签名。"""
+    plugin = plugin_main.MyPlugin.__new__(plugin_main.MyPlugin)
+    event = MockEvent()
+    cases = [
+        (lambda: plugin.mcdel(event), "用法：/mcdel <名称或ID>\n示例：/mcdel 1"),
+        (lambda: plugin.mcget(event), "用法：/mcget <名称或ID>\n示例：/mcget 1"),
+        (
+            lambda: plugin.mcup(event),
+            "用法：/mcup <名称或ID> [新名称] [新地址]\n示例：/mcup 1 新生存服",
+        ),
+        (
+            lambda: plugin.mcnote(event),
+            "用法：/mcnote <名称或ID> [备注]\n示例：/mcnote 1 欢迎来到服务器",
+        ),
+        (
+            lambda: plugin.mcalias(event),
+            "用法：/mcalias <名称或ID> [别名]\n示例：/mcalias 1 生存服",
+        ),
+        (
+            lambda: plugin.mctoggle(event),
+            "用法：/mctoggle <players|notes|time|id>\n示例：/mctoggle players",
+        ),
+        (
+            lambda: plugin.mcadd(event, "生存服", "127.0.0.1:25565", "yes"),
+            "用法：/mcadd <服务器名称> <服务器地址> [True]\n"
+            "说明：末尾仅可填写 True 以跳过预查询。",
+        ),
+        (
+            lambda: plugin.mcdata(event, None, "many"),
+            "小时数必须是 1 到 168 的整数。\n"
+            "用法：/mcdata [名称或ID] [小时数]\n示例：/mcdata 1 48",
+        ),
+    ]
+
+    for command, expected in cases:
+        assert await collect(command()) == [expected]
+
+
 def test_command_documentation_consistency() -> None:
     """所有实际注册命令必须同时出现在 HELP_INFO 和 README 中。"""
     source = (PROJECT_ROOT / "main.py").read_text(encoding="utf-8")

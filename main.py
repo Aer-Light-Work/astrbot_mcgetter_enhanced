@@ -199,7 +199,9 @@ class MyPlugin(Star):
             yield event.plain_result("查询服务器信息时发生错误")
 
     @filter.command("mcadd")
-    async def mcadd(self, event: AstrMessageEvent, name: str, host: str, force: bool = False) -> MessageEventResult:
+    async def mcadd(
+        self, event: AstrMessageEvent, name: str = "", host: str = "", force: bool = False,
+    ) -> MessageEventResult:
         """
         添加新的服务器
 
@@ -212,9 +214,16 @@ class MyPlugin(Star):
         Returns:
             操作结果消息
         """
-        logger.info(f"开始执行 mcadd 命令: {name} -> {host}, force: {force}")
-        
         try:
+            if not name or not host:
+                yield event.plain_result(
+                    "用法：/mcadd <服务器名称> <服务器地址> [True]\n"
+                    "示例：/mcadd 生存服 127.0.0.1:25565"
+                )
+                return
+
+            logger.info(f"开始执行 mcadd 命令: {name} -> {host}, force: {force}")
+
             # 检查host合法性
             if not re.match(r'^[a-zA-Z0-9.:-]+$', host):
                 yield event.plain_result("服务器地址格式不正确，只能包含字母、数字和符号.:-")

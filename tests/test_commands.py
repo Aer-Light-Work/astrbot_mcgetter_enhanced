@@ -31,6 +31,18 @@ async def collect(generator: AsyncGenerator[Any, None]) -> List[Any]:
     return [item async for item in generator]
 
 
+async def test_mcadd_missing_parameters_shows_friendly_usage() -> None:
+    """/mcadd 缺少名称或地址时，应返回用户可直接照抄的用法。"""
+    plugin = plugin_main.MyPlugin.__new__(plugin_main.MyPlugin)
+    expected = [
+        "用法：/mcadd <服务器名称> <服务器地址> [True]\n"
+        "示例：/mcadd 生存服 127.0.0.1:25565",
+    ]
+
+    assert await collect(plugin.mcadd(MockEvent())) == expected
+    assert await collect(plugin.mcadd(MockEvent(), "生存服")) == expected
+
+
 def test_command_documentation_consistency() -> None:
     """所有实际注册命令必须同时出现在 HELP_INFO 和 README 中。"""
     source = (PROJECT_ROOT / "main.py").read_text(encoding="utf-8")

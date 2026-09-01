@@ -9,6 +9,9 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 
+# IDE
+.vscode/
+
 # 本地虚拟环境
 .venv/
 
